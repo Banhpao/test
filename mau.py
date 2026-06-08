@@ -8,8 +8,6 @@ Chạy: python app_gradio.py
 
 import gradio as gr
 
-print(">>> YumeAI app_full — BAN GOP DAY DU + PROMPT THONG MINH <<<  (da gop 2 ban)")
-
 # ── Fix A: Bypass brotli middleware (nén nhưng không sửa Content-Length)
 try:
     import gradio.brotli_middleware as _bm
@@ -44,7 +42,7 @@ def _fx():
         lg.addFilter(f)
 threading.Thread(target=lambda: (_fx(), __import__('time').sleep(2), _fx()), daemon=True).start()
 
-import httpx, json, uuid, time, io, random, os, re, inspect, struct
+import httpx, json, uuid, time, io, random, os, re
 from PIL import Image, ImageFilter
 import numpy as np
 
@@ -127,97 +125,6 @@ Examples:
     except Exception as e:
         print(f"❌ Translation error: {e}")
         return vi_text
-
-
-def _ollama_chat(model, system, user, *, temperature=0.2, num_predict=160,
-                 timeout=30, retries=2):
-    """Gọi Ollama /api/chat có RETRY (lần đầu sau idle dễ chậm/timeout).
-    Trả về text (đã strip) hoặc '' nếu thất bại hết."""
-    last_err = None
-    for attempt in range(1, retries + 2):   # retries=2 → tối đa 3 lần
-        try:
-            with httpx.Client(timeout=timeout) as c:
-                r = c.post(f"{OLLAMA_URL}/api/chat", json={
-                    "model": model,
-                    "messages": [{"role": "system", "content": system},
-                                 {"role": "user", "content": user}],
-                    "stream": False,
-                    "options": {"temperature": temperature, "num_predict": num_predict}
-                })
-                return r.json().get("message", {}).get("content", "").strip()
-        except Exception as e:
-            last_err = e
-            print(f"⚠️ Ollama chat lỗi (lần {attempt}/{retries + 1}): {e}")
-            time.sleep(1.2 * attempt)
-    print(f"❌ Ollama chat thất bại sau {retries + 1} lần: {last_err}")
-    return ""
-
-
-def warmup_ollama():
-    """Nạp sẵn model dịch + chat vào RAM để lần gọi đầu không chậm/timeout.
-    Ollama nạp model lazy — call rỗng này 'làm nóng' trước. Chạy nền (daemon thread)."""
-    for m in {TRANSLATE_MODEL, OLLAMA_MODEL}:
-        try:
-            with httpx.Client(timeout=60) as c:
-                c.post(f"{OLLAMA_URL}/api/chat", json={
-                    "model": m,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "stream": False,
-                    "options": {"num_predict": 1}
-                })
-            print(f"🔥 Warmup Ollama: {m} sẵn sàng")
-        except Exception as e:
-            print(f"⚠️ Warmup {m} lỗi (bỏ qua): {e}")
-
-
-def enrich_for_create(vi_text: str, style: str = "Anime") -> str:
-    """LLM 'LÀM GIÀU' prompt — học cách ChatGPT/Gemini mở rộng câu ngắn thành mô tả chi tiết (cho TẠO ảnh mới).
-    Giữ ĐÚNG nội dung người dùng nêu (chủ thể, trang phục, bối cảnh), chỉ THÊM chi tiết bổ trợ:
-    ngoại hình, biểu cảm, ánh sáng, không khí, bố cục/ống kính, từ khóa chất lượng.
-    Hỏng → tự lùi về dịch tag thường (translate_vi_en) → cuối cùng giữ nguyên câu gốc."""
-    look = ("anime art style, clean line art, vibrant cel shading, soft anime lighting"
-            if style != "Realistic"
-            else "photorealistic, natural skin texture, realistic lighting, sharp focus")
-    system = f"""You are an expert text-to-image prompt engineer for the Flux / Stable Diffusion image models.
-Expand the user's short Vietnamese description into ONE rich, detailed English prompt.
-
-Think about and include, when relevant: the subject and how many people, detailed appearance (face, hair, eyes, body),
-clothing (be precise and KEEP any stated colors/materials), pose and facial expression, the setting / background,
-lighting, mood and atmosphere, and composition / camera (shot type, angle, framing).
-Add tasteful complementary detail, but DO NOT change what the user actually asked for: keep their subject, their
-clothing, their setting. Never invent a different scene or different clothes than stated.
-Match this visual style: {look}.
-
-OUTPUT RULES:
-- Output ONLY the final English prompt.
-- Comma-separated descriptive phrases (NOT full sentences), about 30-55 words.
-- No preamble, no quotes, no explanation, no line breaks, no markdown, no "Prompt:" prefix.
-
-Examples:
-"co gai toc bac dung duoi mua" -> 1girl, solo, long silver hair, detailed eyes, melancholic expression, standing in the rain, wet hair and clothes, city street at night, neon reflections on wet ground, soft rim lighting, cinematic atmosphere, depth of field, highly detailed
-"co gai toc vang mac bikini do tren bai bien" -> 1girl, solo, long blonde hair, blue eyes, gentle smile, red bikini, slim figure, standing on a sunny tropical beach, turquoise sea, golden hour sunlight, gentle wind, full body shot, shallow depth of field, vibrant colors, highly detailed
-"hai co gai ngoi uong tra trong quan cafe" -> 2girls, sitting at a wooden table, cozy cafe interior, holding teacups, warm relaxed expressions, casual outfits, soft window light, plants and bookshelves in background, shallow depth of field, warm color palette, highly detailed"""
-    try:
-        with httpx.Client(timeout=40) as c:
-            r = c.post(f"{OLLAMA_URL}/api/chat", json={
-                "model": TRANSLATE_MODEL,
-                "messages": [{"role": "system", "content": system},
-                             {"role": "user", "content": vi_text}],
-                "stream": False,
-                "options": {"temperature": 0.6, "num_predict": 220}
-            })
-            en = r.json().get("message", {}).get("content", "").strip()
-            en = " ".join(en.splitlines())                       # gộp về 1 dòng
-            en = en.replace('"', "").replace("`", "").replace("*", "").replace("#", "").strip()
-            for pre in ("prompt:", "english:", "output:", "english prompt:"):
-                if en.lower().startswith(pre):
-                    en = en[len(pre):].strip()
-            print(f"🧠 Enrich VI: {vi_text}")
-            print(f"🧠 Enrich EN: {en}")
-            return en if len(en) > 10 else translate_vi_en(vi_text)
-    except Exception as e:
-        print(f"❌ Enrich error: {e} → lùi về dịch thường")
-        return translate_vi_en(vi_text)
 
 
 def _fetch_model_list(node_class: str, input_field: str) -> list:
@@ -1250,154 +1157,16 @@ def inpaint_fn(input_image, action, target_vi, replacement_vi,
 # ══════════════════════════════════
 # FLUX KONTEXT — edit ảnh theo lệnh (hiểu lệnh thật)
 # ══════════════════════════════════
-def _pick_best_quant(files: list) -> str:
-    """
-    Chọn quant TỐT NHẤT trong các file Kontext có sẵn.
-    Ưu tiên vùng Q4–Q6 (cân bằng chất lượng/RAM cho máy 4GB + offload); Q3 chỉ khi không có gì hơn.
-    Nhờ vậy: tải Q4_K_M vào models/unet là app TỰ dùng nó thay cho Q3_K_S cũ (không cần sửa code).
-    """
-    order = ["q6_k", "q5_k_m", "q5_k_s", "q5_1", "q5_0",
-             "q4_k_m", "q4_k_s", "q4_1", "q4_0",
-             "q3_k_l", "q3_k_m", "q3_k_s", "q2_k",
-             "q8_0", "fp16", "bf16", "f16"]
-    for kw in order:
-        for f in files:
-            if kw in f.lower().replace("-", "_"):
-                return f
-    return files[0]
-
-
-# ── E + F: chọn model Kontext (quant) & LoRA thêm (style/trang phục) ──
-_SELECTED_KONTEXT = {"unet": None}            # dropdown set; None = tự chọn quant tốt nhất
-_EXTRA_LORA = {"name": None, "strength": 0.9} # LoRA Flux thêm, chồng lên Turbo
-_KONTEXT_AUTO = "(tự chọn quant tốt nhất)"
-_NO_EXTRA_LORA = "(không dùng)"
-
-
-def list_kontext_unets() -> list:
-    return [m for m in _fetch_model_list("UnetLoaderGGUF", "unet_name") if "kontext" in m.lower()]
-
-
-def list_kontext_choices() -> list:
-    return [_KONTEXT_AUTO] + list_kontext_unets()
-
-
-def list_all_loras() -> list:
-    return _fetch_model_list("LoraLoaderModelOnly", "lora_name")
-
-
-def list_extra_lora_choices() -> list:
-    # Ẩn LoRA SD1.5/SDXL khỏi danh sách (không tương thích Flux). Giữ flux + unknown (fail-open).
-    return [_NO_EXTRA_LORA] + [m for m in list_all_loras() if lora_arch(m) != "sd"]
-
-
-# ── Phân loại kiến trúc LoRA (Flux vs SD) để chặn nạp nhầm vào Flux ──
-_LORA_ARCH_CACHE = {}
-_FLUX_LORA_HINTS = ("double_blocks", "single_blocks", "single_transformer_blocks",
-                    "txt_attn", "img_attn", "txt_mlp", "img_mlp")
-_SD_LORA_HINTS   = ("up_blocks", "down_blocks", "mid_block",
-                    "input_blocks", "output_blocks", "middle_block")
-
-
-def _read_safetensors_keys(path):
-    """Đọc tên tensor trong header .safetensors mà KHÔNG load weight.
-    Format: 8 byte đầu = độ dài header (uint64 LE), tiếp theo là JSON {tên_tensor: {...}}."""
-    try:
-        with open(path, "rb") as f:
-            n = struct.unpack("<Q", f.read(8))[0]
-            header = json.loads(f.read(n).decode("utf-8"))
-        return [k for k in header.keys() if k != "__metadata__"]
-    except Exception as e:
-        print(f"⚠️ Đọc header LoRA lỗi ({os.path.basename(path)}): {e}")
-        return []
-
-
-def lora_arch(name):
-    """Phân loại LoRA: 'flux' | 'sd' | 'unknown' (đọc file trong models/loras, có cache).
-    'unknown' = không đọc được/không rõ → fail-open (vẫn cho nạp)."""
-    if name in _LORA_ARCH_CACHE:
-        return _LORA_ARCH_CACHE[name]
-    keys = _read_safetensors_keys(os.path.join(COMFY_MODELS_DIR, "loras", name))
-    j = " ".join(keys).lower()
-    if   any(h in j for h in _FLUX_LORA_HINTS): arch = "flux"
-    elif any(h in j for h in _SD_LORA_HINTS):   arch = "sd"
-    else:                                       arch = "unknown"
-    _LORA_ARCH_CACHE[name] = arch
-    return arch
-
-
-def _looks_degenerate(en: str) -> bool:
-    """Câu lệnh dịch ra coi như hỏng nếu rỗng/quá ngắn, hoặc rơi về fallback 'Edit the image based on:'.
-    (Không bắt được mọi rác — vd model bịa ra cụm vô nghĩa dài — nhưng chặn được ca câm/cụt.)"""
-    e = (en or "").strip()
-    return len(e) < 8 or e.lower().startswith("edit the image based on:")
-
-
-def _chain_loras_into(wf, turbo_lora, lora_strength):
-    """Nối Turbo LoRA + LoRA thêm (nếu có) vào input 'model' của KSampler node '50'. Sửa wf tại chỗ.
-    CHẶN NẠP TRÙNG: nếu LoRA thêm trùng tên Turbo (không phân biệt hoa/thường) → bỏ qua,
-    tránh chồng cùng 1 LoRA hai lần làm méo/đội RAM vô ích."""
-    model_src = ["1", 0]
-    nid = 10
-    loaded = set()   # các lora_name (lower) đã nối → chặn trùng
-
-    def _add(name, strength):
-        nonlocal model_src, nid
-        if not name:
-            return None
-        key = name.lower()
-        if key in loaded:
-            print(f"⏭️  Bỏ qua LoRA trùng: {name}")
-            return None
-        s = max(0.0, min(2.0, float(strength)))
-        wf[str(nid)] = {"class_type": "LoraLoaderModelOnly",
-                        "inputs": {"model": model_src, "lora_name": name,
-                                   "strength_model": s}}
-        model_src = [str(nid), 0]
-        nid += 1
-        loaded.add(key)
-        return s
-
-    if turbo_lora:
-        _add(turbo_lora, lora_strength)
-    extra = _EXTRA_LORA.get("name")
-    if extra:
-        arch = lora_arch(extra)
-        if arch == "sd":
-            print(f"⛔ Bỏ LoRA '{extra}': LoRA SD1.5/SDXL KHÔNG tương thích Flux "
-                  f"(nạp vào chỉ spam 'lora key not loaded', vô tác dụng). Dùng LoRA Flux thật.")
-        else:
-            es = _add(extra, _EXTRA_LORA.get("strength", 1.0))
-            if es is not None:
-                print(f"➕ LoRA thêm: {extra} x{es}"
-                      + (" (chưa rõ kiến trúc — thử nạp)" if arch == "unknown" else ""))
-    wf["50"]["inputs"]["model"] = model_src
-
-
-def set_kontext_model(name):
-    _SELECTED_KONTEXT["unet"] = None if (not name or name == _KONTEXT_AUTO) else name
-
-
-def set_extra_lora(name, strength):
-    _EXTRA_LORA["name"] = None if (not name or name == _NO_EXTRA_LORA) else name
-    _EXTRA_LORA["strength"] = float(strength)
-
-
-def refresh_models_lists():
-    return gr.update(choices=list_kontext_choices()), gr.update(choices=list_extra_lora_choices())
-
-
 def get_flux_models() -> dict:
     """
     Kiểm tra Flux Kontext có đủ model không.
     Trả về dict {unet, t5, clip_l, vae} nếu đủ, else {} (rỗng).
     """
     try:
-        kontexts = list_kontext_unets()
-        if not kontexts:
+        unet = _fetch_model_list("UnetLoaderGGUF", "unet_name")
+        kontext = next((m for m in unet if "kontext" in m.lower()), None)
+        if not kontext:
             return {}
-        chosen = _SELECTED_KONTEXT.get("unet")
-        kontext = chosen if (chosen and chosen in kontexts) else _pick_best_quant(kontexts)
 
         clips  = _fetch_model_list("DualCLIPLoader", "clip_name1")
         t5     = next((m for m in clips if "t5" in m.lower()), None)
@@ -1451,53 +1220,30 @@ Examples:
 "đổi tóc thành màu đỏ" → Change the hair color to bright red while keeping the same face and outfit
 "xóa người phía sau" → Remove the person in the background while keeping everyone else and the scene unchanged"""
 
-    en = _ollama_chat(TRANSLATE_MODEL, system, vi_text,
-                      temperature=0.2, num_predict=160, timeout=30, retries=2)
-    if not en:
+    try:
+        with httpx.Client(timeout=30) as c:
+            r = c.post(f"{OLLAMA_URL}/api/chat", json={
+                "model": TRANSLATE_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": vi_text}
+                ],
+                "stream": False,
+                "options": {"temperature": 0.2, "num_predict": 160}
+            })
+            en = r.json().get("message", {}).get("content", "").strip()
+            en = en.split("\n")[0].replace('"', "").replace("`", "").strip()
+            print(f"🧠 Kontext VI: {vi_text}")
+            print(f"🧠 Kontext EN: {en}")
+            return en if len(en) > 5 else f"Edit the image based on: {vi_text}"
+    except Exception as e:
+        print(f"❌ Kontext translate error: {e}")
         return f"Edit the image based on: {vi_text}"
-    en = en.split("\n")[0].replace('"', "").replace("`", "").strip()
-    print(f"🧠 Kontext VI: {vi_text}")
-    print(f"🧠 Kontext EN: {en}")
-    return en if len(en) > 5 else f"Edit the image based on: {vi_text}"
-
-
-def review_kontext_instruction(vi_text: str, en_candidate: str) -> str:
-    """Vòng SOI LẠI: LLM tự kiểm tra bản dịch Kontext so với câu gốc tiếng Việt và sửa
-    lỗi hay gặp (sai trang phục theo giới, gộp 2 nhân vật, rớt màu, dùng 'Transform',
-    thiếu vế giữ mặt/tóc/dáng). 1 lượt soi. Trả về lệnh EN đã sửa (hoặc bản cũ nếu đã ổn / soi lỗi)."""
-    if not en_candidate:
-        return en_candidate
-    system = """You review and FIX an English image-editing instruction for the Flux Kontext editor, comparing it against the original Vietnamese request.
-Check and correct ALL of these:
-- Clothing must match the request and the subject's gender. For a woman, "đồ bơi" = swimsuit/bikini/one-piece, NEVER "swim trunks".
-- "mát mẻ" = revealing/skimpy; "kín đáo" = modest/conservative. Keep every stated color and material.
-- If the Vietnamese gives DIFFERENT clothes to DIFFERENT people, the English MUST keep them separate, each named by a visible feature (hair/dress color), joined by ';'. NEVER merge into "both"/"them" when the items differ.
-- Must start with Change/Replace/Dress/Add/Remove, NEVER "Transform".
-- Unless the request changes the face/hair, it must end with a clause preserving identity (e.g. "while keeping the same faces, hairstyle, body and pose").
-- Output ONE single-line instruction only. No quotes, no explanation, no preamble. If the candidate is already correct, output it unchanged."""
-    user = (f"Vietnamese request: {vi_text}\n"
-            f"Candidate English: {en_candidate}\n"
-            "Return the corrected single-line instruction:")
-    fixed = _ollama_chat(TRANSLATE_MODEL, system, user,
-                         temperature=0.1, num_predict=180, timeout=35, retries=1)
-    if not fixed:
-        return en_candidate   # soi lỗi → giữ bản dịch gốc
-    fixed = fixed.split("\n")[0].replace('"', "").replace("`", "").strip()
-    for pre in ("corrected:", "instruction:", "output:", "english:"):
-        if fixed.lower().startswith(pre):
-            fixed = fixed[len(pre):].strip()
-    if len(fixed) < 5:
-        return en_candidate
-    if fixed.strip().lower() != en_candidate.strip().lower():
-        print(f"🔁 Soi lại Kontext → đã sửa: {fixed}")
-    else:
-        print("🔁 Soi lại Kontext → lệnh đã ổn")
-    return fixed
 
 
 def flux_kontext_fn(input_image, instruction_vi, progress=None,
                     guidance=3.5, steps=28, use_turbo=True, lora_strength=1.0,
-                    instruction_override="", review=True):
+                    instruction_override=""):
     """
     Edit ảnh bằng Flux Kontext — hiểu lệnh thật (đổi đồ, đổi nền, xóa vật...).
     Rất chậm trên 4GB VRAM (offload sang RAM) nhưng chất lượng cao.
@@ -1538,13 +1284,6 @@ def flux_kontext_fn(input_image, instruction_vi, progress=None,
         print(f"🧠 Kontext (lệnh tự nhập/đã sửa): {instruction_en}")
     else:
         instruction_en = translate_for_kontext(instruction_vi)
-        if review:
-            instruction_en = review_kontext_instruction(instruction_vi, instruction_en)
-        if _looks_degenerate(instruction_en):
-            raise Exception(
-                "Bộ dịch nội bộ không ra được câu lệnh rõ ràng cho yêu cầu này "
-                "(model dịch nhỏ hay hỏng ở câu khó). Hãy tự gõ câu lệnh tiếng Anh vào ô "
-                "'Lệnh Kontext (EN)' rồi bấm Gửi lại — sẽ chạy thẳng, khỏi qua bộ dịch.")
 
     seed = random.randint(1, 2**31)
     print(f"🧠 Flux Kontext: {flux['unet']}  | guidance={guidance} | steps={steps}"
@@ -1583,8 +1322,12 @@ def flux_kontext_fn(input_image, instruction_vi, progress=None,
                "inputs": {"images": ["60", 0], "filename_prefix": "yumeai_flux"}},
     }
 
-    # Nối Turbo LoRA + LoRA thêm (nếu có) vào KSampler
-    _chain_loras_into(wf, turbo_lora, lora_strength)
+    # Chèn Turbo LoRA (nếu có) vào giữa UNet và KSampler để chạy ~8 bước
+    if turbo_lora:
+        wf["10"] = {"class_type": "LoraLoaderModelOnly",
+                    "inputs": {"model": ["1", 0], "lora_name": turbo_lora,
+                               "strength_model": lora_strength}}
+        wf["50"]["inputs"]["model"] = ["10", 0]
 
     if progress: progress(0.15, desc="Đang chạy Flux Kontext (rất chậm trên 4GB)...")
     pid = submit_workflow(wf)
@@ -1599,16 +1342,12 @@ def flux_kontext_fn(input_image, instruction_vi, progress=None,
 # ══════════════════════════════════
 # UNIFIED CHAT HANDLER
 # ══════════════════════════════════
-def preview_kontext_fn(message, review=True):
-    """Dịch thử lệnh VI → EN cho Kontext (KHÔNG tạo ảnh). Nếu bật review → soi lại luôn,
-    để ô EN khớp đúng lệnh sẽ chạy thật (vì khi ô EN có chữ, lúc Gửi sẽ dùng thẳng, bỏ qua review)."""
+def preview_kontext_fn(message):
+    """Dịch thử lệnh VI → EN cho Kontext (KHÔNG tạo ảnh) để người dùng xem/sửa trước khi chạy."""
     text = (message or "").strip()
     if not text:
         return gr.update()   # không có gì để dịch → giữ nguyên ô EN
-    en = translate_for_kontext(text)
-    if review:
-        en = review_kontext_instruction(text, en)
-    return en
+    return translate_for_kontext(text)
 
 
 def build_multichar_prompt(feat1, out1, feat2, out2, keep):
@@ -1634,227 +1373,13 @@ def build_multichar_prompt(feat1, out1, feat2, out2, keep):
     return sentence[0].upper() + sentence[1:]
 
 
-# ── Method C: đổi đồ theo VÙNG (mask inpaint) cho TỪNG nhân vật ──
-_VI_COLORS = {
-    "xanh dương": "blue", "xanh lá": "green", "xanh lam": "blue", "xanh": "blue",
-    "đỏ": "red", "cam": "orange", "vàng": "yellow", "tím": "purple", "hồng": "pink",
-    "đen": "black", "trắng": "white", "xám": "gray", "nâu": "brown", "be": "beige",
-}
-_VI_GARMENTS = {
-    "áo khoác": "jacket", "áo thun": "t-shirt", "áo tắm": "swimsuit", "áo": "shirt. top",
-    "quần short": "shorts", "quần đùi": "shorts", "quần": "pants",
-    "váy": "dress", "đầm": "dress", "bikini": "bikini", "đồ bơi": "swimsuit", "đồ": "outfit",
-}
-
-
-def translate_garment_region(vi_text: str) -> str:
-    """Dịch 'món đồ + màu' để GroundingDINO khoanh đúng vùng của 1 nhân vật (GIỮ màu để phân biệt)."""
-    t = vi_text.lower().strip()
-    color   = next((en for vi, en in sorted(_VI_COLORS.items(),   key=lambda x: -len(x[0])) if vi in t), "")
-    garment = next((en for vi, en in sorted(_VI_GARMENTS.items(), key=lambda x: -len(x[0])) if vi in t), "")
-    if garment:
-        return (color + " " + garment).strip()
-    return translate_vi_en(vi_text)
-
-
-def region_edit_fn(input_image, target_vi, new_outfit_vi, style, resolution, progress=None):
-    """
-    Đổi đồ THEO VÙNG (mask): GroundingDINO+SAM khoanh đúng món đồ (theo màu để trúng 1 người)
-    → SD inpaint vẽ đồ mới CHỈ trong vùng đó. Mặt/tóc/người kia nằm ngoài mask nên giữ nguyên.
-    Chạy 1 lần cho mỗi nhân vật. Không cần bật Flux Kontext.
-    """
-    if input_image is None:
-        raise gr.Error("Chưa có ảnh tham chiếu!")
-    if not (target_vi or "").strip() or not (new_outfit_vi or "").strip():
-        raise gr.Error("Cần nhập cả 'vùng cần đổi' và 'đồ mới'!")
-    if not get_segment_available():
-        raise gr.Error("Chưa cài segment-anything (cài comfyui_segment_anything rồi restart ComfyUI).")
-
-    target_en = translate_garment_region(target_vi)
-    outfit_en = translate_vi_en(new_outfit_vi)
-    print(f"🎯 Region: '{target_vi}' → mask '{target_en}'  |  đồ mới '{new_outfit_vi}' → '{outfit_en}'")
-
-    if progress: progress(0.1, desc="Upload ảnh...")
-    img = input_image.convert("RGB")
-    w, h = img.size
-    target = int(resolution)
-    scale = min(target / w, target / h)
-    nw = max(64, (int(w * scale) // 64) * 64)
-    nh = max(64, (int(h * scale) // 64) * 64)
-    img = img.resize((nw, nh))
-    uploaded = upload_image_to_comfy(img)
-    seed = random.randint(1, 2**31)
-
-    model = get_inpaint_model(style if style in ("Anime", "Realistic", "Semi") else "Anime")
-    if not model:
-        raise gr.Error("Không tìm thấy checkpoint inpaint!")
-    print(f"🎨 Region inpaint model: {model}")
-
-    style_tag = {"Anime": "anime style", "Realistic": "photorealistic",
-                 "Semi": "semi-realistic digital art"}.get(style, "anime style")
-    full_prompt = (f"{outfit_en}, {style_tag}, same person, natural body, "
-                   "seamless, highly detailed, best quality")
-    neg_prompt = ("worst quality, low quality, blurry, deformed, extra limbs, bad anatomy, "
-                  "different person, changed face, watermark, text")
-
-    wf = {
-        "20": {"class_type": "LoadImage", "inputs": {"image": uploaded}},
-        "30": {"class_type": "GroundingDinoModelLoader (segment anything)",
-               "inputs": {"model_name": "GroundingDINO_SwinT_OGC (694MB)"}},
-        "31": {"class_type": "SAMModelLoader (segment anything)",
-               "inputs": {"model_name": "sam_vit_b (375MB)"}},
-        "32": {"class_type": "GroundingDinoSAMSegment (segment anything)",
-               "inputs": {"grounding_dino_model": ["30", 0], "sam_model": ["31", 0],
-                          "image": ["20", 0], "prompt": target_en, "threshold": 0.3}},
-        "33": {"class_type": "GrowMask",
-               "inputs": {"mask": ["32", 1], "expand": 10, "tapered_corners": True}},
-        "34": {"class_type": "FeatherMask",
-               "inputs": {"mask": ["33", 0], "left": 8, "top": 8, "right": 8, "bottom": 8}},
-        "1":  {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
-        "40": {"class_type": "CLIPTextEncode", "inputs": {"text": full_prompt, "clip": ["1", 1]}},
-        "41": {"class_type": "CLIPTextEncode", "inputs": {"text": neg_prompt, "clip": ["1", 1]}},
-        "42": {"class_type": "VAEEncodeForInpaint",
-               "inputs": {"pixels": ["20", 0], "vae": ["1", 2], "mask": ["34", 0], "grow_mask_by": 6}},
-        "50": {"class_type": "KSampler",
-               "inputs": {"model": ["1", 0], "positive": ["40", 0], "negative": ["41", 0],
-                          "latent_image": ["42", 0], "seed": seed, "steps": 30, "cfg": 7.0,
-                          "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
-        "60": {"class_type": "VAEDecode", "inputs": {"samples": ["50", 0], "vae": ["1", 2]}},
-        "70": {"class_type": "SaveImage", "inputs": {"images": ["60", 0], "filename_prefix": "yumeai_region"}},
-    }
-    if progress: progress(0.3, desc=f"Đổi đồ vùng '{target_en}'...")
-    pid = submit_workflow(wf)
-    result = poll_and_download(pid, progress=progress, start_pct=0.3, timeout=300)
-    info = (f"🎯 Đổi đồ vùng: '{target_vi}' → '{new_outfit_vi}'\n"
-            f"📐 {nw}x{nh} | mask: {target_en} | 🎲 seed:{seed}")
-    return result, info
-
-
-def region_edit_handler(ref_image, target_vi, new_outfit_vi, style, resolution, history):
-    """Nút 'Đổi đồ vùng này': chạy region_edit_fn rồi đổ kết quả vào ô ảnh + ảnh tham chiếu (để đổi tiếp người 2)."""
-    history = history or []
-    user_msg = {"role": "user", "content": f"🎯 [vùng] đổi '{target_vi}' → '{new_outfit_vi}'"}
-    if ref_image is None:
-        yield history + [{"role": "assistant", "content": "⚠️ Chưa có ảnh tham chiếu để đổi."}], None, None
-        return
-    if not (target_vi or "").strip() or not (new_outfit_vi or "").strip():
-        yield history + [user_msg, {"role": "assistant", "content": "⚠️ Cần nhập cả 'vùng cần đổi' và 'đồ mới'."}], None, ref_image
-        return
-    yield history + [user_msg, {"role": "assistant", "content": "🎯 Đang khoanh vùng & đổi đồ (mask inpaint, ~1–2 phút)..."}], None, ref_image
-    try:
-        img, info = region_edit_fn(ref_image, target_vi, new_outfit_vi, style, resolution, _dummy_progress)
-        new_hist = history + [user_msg, {"role": "assistant",
-                   "content": f"✅ Xong! Kết quả đã thành ảnh tham chiếu mới — đổi tiếp người khác được ngay.\n{info}"}]
-        yield new_hist, img, img   # gen_image = img ; ref_input = img (để chain sang người 2)
-    except Exception as e:
-        yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi đổi vùng: {e}"}], None, ref_image
-
-
-# ── Method D: 'mặc theo ảnh' — đưa ảnh trang phục tham chiếu (2 ReferenceLatent nối chuỗi) ──
-def garment_transfer_fn(person_image, garment_image, note_vi, progress=None,
-                        guidance=3.5, steps=28, use_turbo=True, lora_strength=1.0):
-    """
-    Method D — mặc theo ảnh: đưa ẢNH trang phục tham chiếu, Kontext mặc bộ đó lên nhân vật.
-    Dùng 2 ReferenceLatent NỐI CHUỖI (cách BFL khuyến nghị, KHÔNG dùng Image Stitch):
-    ảnh nhân vật là tham chiếu CHÍNH (vào trước), ảnh trang phục là tham chiếu phụ.
-    """
-    if person_image is None:  raise gr.Error("Chưa có ảnh nhân vật (ô 'Ảnh tham chiếu')!")
-    if garment_image is None: raise gr.Error("Chưa có ảnh trang phục tham chiếu!")
-    flux = get_flux_models()
-    if not flux:
-        raise gr.Error("Flux Kontext chưa đủ model (GGUF + clip_l + t5 + ae).")
-
-    guidance = max(1.0, min(6.0, float(guidance)))
-    lora_strength = max(0.0, min(2.0, float(lora_strength)))
-    turbo_lora = get_flux_turbo_lora() if use_turbo else ""
-    if turbo_lora:
-        steps = 8 if int(steps) > 12 else max(4, int(steps))
-    else:
-        steps = max(12, min(40, int(steps)))
-
-    if progress: progress(0.05, desc="Upload ảnh...")
-    person_name  = upload_image_to_comfy(person_image.convert("RGB"))
-    garment_name = upload_image_to_comfy(garment_image.convert("RGB"))
-
-    note = (note_vi or "").strip()
-    note_en = translate_vi_en(note) if note else ""
-    instruction = ("Make the person wear the same outfit as shown in the clothing reference image, "
-                   "keeping the person's face, hairstyle, body shape and pose unchanged")
-    if note_en:
-        instruction += f". {note_en}"
-
-    seed = random.randint(1, 2**31)
-    print(f"👕 Garment transfer | guidance={guidance} | steps={steps}"
-          + (f" | ⚡Turbo x{lora_strength}" if turbo_lora else ""))
-    print(f"👕 Instruction: {instruction}")
-
-    wf = {
-        "1":  {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": flux["unet"]}},
-        "2":  {"class_type": "DualCLIPLoader",
-               "inputs": {"clip_name1": flux["clip_l"], "clip_name2": flux["t5"], "type": "flux"}},
-        "3":  {"class_type": "VAELoader", "inputs": {"vae_name": flux["vae"]}},
-        # Ảnh nhân vật (tham chiếu chính) — quyết định bố cục/kích thước output
-        "20": {"class_type": "LoadImage", "inputs": {"image": person_name}},
-        "21": {"class_type": "FluxKontextImageScale", "inputs": {"image": ["20", 0]}},
-        "22": {"class_type": "VAEEncode", "inputs": {"pixels": ["21", 0], "vae": ["3", 0]}},
-        # Ảnh trang phục (tham chiếu phụ)
-        "23": {"class_type": "LoadImage", "inputs": {"image": garment_name}},
-        "24": {"class_type": "FluxKontextImageScale", "inputs": {"image": ["23", 0]}},
-        "25": {"class_type": "VAEEncode", "inputs": {"pixels": ["24", 0], "vae": ["3", 0]}},
-        "30": {"class_type": "CLIPTextEncode", "inputs": {"text": instruction, "clip": ["2", 0]}},
-        # 2 ReferenceLatent NỐI CHUỖI: person trước (chính), garment sau (phụ)
-        "31": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["30", 0], "latent": ["22", 0]}},
-        "35": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["31", 0], "latent": ["25", 0]}},
-        "32": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["35", 0], "guidance": guidance}},
-        "33": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["30", 0]}},
-        "50": {"class_type": "KSampler", "inputs": {
-                   "model": ["1", 0], "positive": ["32", 0], "negative": ["33", 0],
-                   "latent_image": ["22", 0], "seed": seed, "steps": steps, "cfg": 1.0,
-                   "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
-        "60": {"class_type": "VAEDecode", "inputs": {"samples": ["50", 0], "vae": ["3", 0]}},
-        "70": {"class_type": "SaveImage", "inputs": {"images": ["60", 0], "filename_prefix": "yumeai_garment"}},
-    }
-    # Nối Turbo LoRA + LoRA thêm (nếu có) vào KSampler
-    _chain_loras_into(wf, turbo_lora, lora_strength)
-
-    if progress: progress(0.15, desc="Đang mặc theo ảnh (Flux Kontext)...")
-    pid = submit_workflow(wf)
-    img = poll_and_download(pid, progress=progress, start_pct=0.15, timeout=900)
-    info = (f"👕 Mặc theo ảnh trang phục tham chiếu\n📝 {instruction}\n"
-            f"🎚️ guidance:{guidance} | steps:{steps} | 🎲 seed:{seed}")
-    return img, info
-
-
-def garment_transfer_handler(person_image, garment_image, note_vi,
-                             flux_guidance, flux_steps, flux_turbo, flux_lora_str, history):
-    """Nút '👕 Mặc theo ảnh này' — Method D: transfer trang phục từ ảnh tham chiếu lên nhân vật."""
-    history = history or []
-    user_msg = {"role": "user", "content": "👕 [mặc theo ảnh trang phục tham chiếu]"}
-    if person_image is None:
-        yield history + [{"role": "assistant", "content": "⚠️ Chưa có ảnh nhân vật (ô 'Ảnh tham chiếu')."}], None, None
-        return
-    if garment_image is None:
-        yield history + [user_msg, {"role": "assistant", "content": "⚠️ Chưa có ảnh trang phục tham chiếu để mặc."}], None, person_image
-        return
-    yield history + [user_msg, {"role": "assistant", "content": "👕 Đang mặc theo ảnh (Flux Kontext)... kiên nhẫn vài phút nhé."}], None, person_image
-    try:
-        img, info = garment_transfer_fn(person_image, garment_image, note_vi, _dummy_progress,
-                                        guidance=flux_guidance, steps=flux_steps,
-                                        use_turbo=flux_turbo, lora_strength=flux_lora_str)
-        new_hist = history + [user_msg, {"role": "assistant",
-                   "content": f"✅ Xong! Kết quả đã thành ảnh tham chiếu mới.\n{info}"}]
-        yield new_hist, img, img   # gen_image = img ; ref_input = img (chain)
-    except Exception as e:
-        yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi mặc theo ảnh: {e}"}], None, person_image
-
-
 def unified_chat(message, history,
                  ref_image, style, resolution,
                  use_ip, use_reactor, use_esrgan,
                  cn_str, face_str, use_flux,
                  flux_guidance, flux_steps,
                  flux_turbo, flux_lora_str,
-                 kontext_prompt, kontext_review=True, enrich=True):
+                 kontext_prompt):
     """
     History format Gradio 6.0: [{"role": "user/assistant", "content": "..."}, ...]
     """
@@ -1877,7 +1402,7 @@ def unified_chat(message, history,
         try:
             model = get_checkpoint_model(style=style)
             if not model: raise Exception("Không tìm thấy checkpoint!")
-            en_tags = enrich_for_create(text, style) if enrich else translate_vi_en(text)
+            en_tags = translate_vi_en(text)
             style_tags = {
                 "Anime":     "anime style, 2d illustration, vibrant colors",
                 "Realistic": "photorealistic, 8k, detailed, soft lighting, cinematic",
@@ -1920,7 +1445,7 @@ def unified_chat(message, history,
                     ref_image, text or "improve the image quality", _dummy_progress,
                     guidance=flux_guidance, steps=flux_steps,
                     use_turbo=flux_turbo, lora_strength=flux_lora_str,
-                    instruction_override=kontext_prompt, review=kontext_review
+                    instruction_override=kontext_prompt
                 )
                 new_hist = history + [user_msg, {"role": "assistant", "content": f"✅ Xong! Xem ảnh bên dưới ↓\n{info}"}]
                 yield new_hist, img
@@ -2054,8 +1579,6 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
             gr.Markdown("### ⚙️ Cài đặt")
             style = gr.Radio(["Anime","Realistic","Semi"], value="Anime", label="Phong cách")
             resolution = gr.Radio(["384","512","640","768"], value="512", label="Độ phân giải")
-            enrich = gr.Checkbox(value=True,
-                                 label="🧠 Prompt thông minh khi TẠO ảnh (LLM mở rộng mô tả — giống ChatGPT/Gemini)")
             gr.Markdown("**Pipeline giữ mặt:**")
             use_ip      = gr.Checkbox(label="IP-Adapter",    value=True)
             use_reactor = gr.Checkbox(label="ReActor",       value=False)
@@ -2069,18 +1592,10 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
                                       label="Kontext Guidance (cao = đổi mạnh hơn)")
             flux_steps    = gr.Slider(16, 40, value=28, step=4,
                                       label="Kontext Steps (cao = nét hơn nhưng chậm hơn)")
-            kontext_review = gr.Checkbox(value=True,
-                                      label="🔁 Soi lại lệnh Kontext (LLM tự kiểm tra & sửa)")
             flux_turbo    = gr.Checkbox(value=True,
                                       label="⚡ Turbo LoRA (ép ~8 bước, nhanh ~5x)")
             flux_lora_str = gr.Slider(0.0, 1.5, value=1.0, step=0.05,
                                       label="Turbo LoRA strength (1.0 = chuẩn)")
-            kontext_model_dd = gr.Dropdown(label="Model Kontext (Q4/Q5 đẹp hơn Q3)",
-                                           choices=list_kontext_choices(), value=_KONTEXT_AUTO)
-            extra_lora_dd = gr.Dropdown(label="LoRA thêm (Flux — style/trang phục)",
-                                        choices=list_extra_lora_choices(), value=_NO_EXTRA_LORA)
-            extra_lora_str = gr.Slider(0.0, 1.5, value=0.9, step=0.05, label="LoRA thêm strength")
-            kontext_refresh_btn = gr.Button("🔄 Tải lại model/LoRA", size="sm")
             kontext_prompt = gr.Textbox(
                 label="Lệnh Kontext (EN) — để trống = tự dịch; điền = dùng thẳng",
                 placeholder="vd: The blonde girl wears a red bikini; the dark-haired girl wears a navy one-piece swimsuit",
@@ -2099,21 +1614,6 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
                 mc_out2  = gr.Textbox(label="Người 2 — đồ mới",   placeholder="a navy one-piece swimsuit", lines=1)
                 mc_keep  = gr.Checkbox(value=True, label="Giữ nguyên mặt / tóc / dáng / tư thế")
                 mc_build_btn = gr.Button("🧩 Ghép lệnh → ô EN", size="sm")
-            with gr.Accordion("🎯 Đổi đồ theo vùng (mask — chắc ăn cho từng người)", open=False):
-                gr.Markdown("<small>Cách chắc nhất cho 'đúng người đúng đồ': khoanh đúng món đồ theo "
-                            "<b>màu</b> rồi vẽ lại CHỈ vùng đó (mặt/tóc/người kia giữ nguyên). "
-                            "Làm 1 lần cho mỗi người — kết quả tự thành ảnh tham chiếu mới để đổi tiếp. "
-                            "Không cần bật Flux Kontext. (Cần segment-anything.)</small>")
-                rg_target = gr.Textbox(label="Vùng cần đổi (món đồ + màu)", placeholder="váy đỏ", lines=1)
-                rg_outfit = gr.Textbox(label="Đồ mới", placeholder="bikini đỏ mát mẻ", lines=1)
-                region_btn = gr.Button("🎯 Đổi đồ vùng này", variant="primary", size="sm")
-            with gr.Accordion("👕 Mặc theo ảnh trang phục (đưa ảnh bộ đồ)", open=False):
-                gr.Markdown("<small>Cần đúng 1 bộ đồ cụ thể? Đưa <b>ảnh bộ đồ</b> vào đây — Kontext mặc bộ đó lên "
-                            "nhân vật trong 'Ảnh tham chiếu' (giữ mặt/tóc/dáng). Dùng 2 ReferenceLatent nối chuỗi "
-                            "(cách BFL khuyến nghị). Cần bật Flux Kontext + đủ model. Kết quả thành ảnh tham chiếu mới.</small>")
-                garment_img  = gr.Image(label="👕 Ảnh trang phục tham chiếu", type="pil", height=160)
-                garment_note = gr.Textbox(label="Ghi chú (tùy chọn)", placeholder="vd: chỉ mặc cho cô tóc vàng / đổi sang màu đỏ", lines=1)
-                garment_btn  = gr.Button("👕 Mặc theo ảnh này", variant="primary", size="sm")
             gr.Markdown("<small>Bật để đổi đồ/nền/xóa vật theo lệnh tự nhiên. Bỏ các tùy chọn trên — Flux tự xử lý.<br>"
                         "Ảnh không đổi → tăng <b>Guidance</b> 3.5→4.0. Vẫn không đổi → đổi model sang bản <b>Q4_K_M</b>.<br>"
                         "Đang test cho nhanh thì kéo <b>Steps</b> về 16–20; ưng rồi nâng lên 28–32 cho nét.<br>"
@@ -2129,33 +1629,13 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
                      cn_str, face_str, use_flux,
                      flux_guidance, flux_steps,
                      flux_turbo, flux_lora_str,
-                     kontext_prompt, kontext_review, enrich]
+                     kontext_prompt]
 
-    # 🔒 NET AN TOÀN (chống lệch thứ tự UI↔hàm): số input PHẢI khớp số tham số unified_chat.
-    # Lệch → app báo lỗi NGAY khi khởi động, không chạy mò.
-    assert len(shared_inputs) == len(inspect.signature(unified_chat).parameters), (
-        f"Gradio inputs ({len(shared_inputs)}) ≠ unified_chat params "
-        f"({len(inspect.signature(unified_chat).parameters)}) — kiểm tra lại shared_inputs!")
-
-    preview_btn.click(preview_kontext_fn, inputs=[msg_input, kontext_review], outputs=[kontext_prompt])
+    preview_btn.click(preview_kontext_fn, inputs=[msg_input], outputs=[kontext_prompt])
 
     mc_build_btn.click(build_multichar_prompt,
                        inputs=[mc_feat1, mc_out1, mc_feat2, mc_out2, mc_keep],
                        outputs=[kontext_prompt])
-
-    region_btn.click(region_edit_handler,
-                     inputs=[ref_input, rg_target, rg_outfit, style, resolution, chatbot],
-                     outputs=[chatbot, gen_image, ref_input])
-
-    garment_btn.click(garment_transfer_handler,
-                      inputs=[ref_input, garment_img, garment_note,
-                              flux_guidance, flux_steps, flux_turbo, flux_lora_str, chatbot],
-                      outputs=[chatbot, gen_image, ref_input])
-
-    kontext_model_dd.change(set_kontext_model, inputs=[kontext_model_dd])
-    extra_lora_dd.change(set_extra_lora, inputs=[extra_lora_dd, extra_lora_str])
-    extra_lora_str.change(set_extra_lora, inputs=[extra_lora_dd, extra_lora_str])
-    kontext_refresh_btn.click(refresh_models_lists, outputs=[kontext_model_dd, extra_lora_dd])
 
     send_btn.click(
         unified_chat, inputs=shared_inputs, outputs=[chatbot, gen_image]
@@ -2170,11 +1650,8 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
 
 if __name__ == "__main__":
     print("\n" + "="*55)
-    print("🌸  YumeAI — Unified Chat (BẢN GỘP đầy đủ + prompt thông minh)")
+    print("🌸  YumeAI — Unified Chat")
     print("="*55)
-    print(f"🔒 UI inputs ({len(shared_inputs)}) khớp unified_chat params "
-          f"({len(inspect.signature(unified_chat).parameters)}) ✅")
-    threading.Thread(target=warmup_ollama, daemon=True).start()  # 🔥 nạp model dịch nền
     print(check_status())
     print("-"*55)
     print(check_controlnet_status())
