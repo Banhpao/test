@@ -2,14 +2,18 @@ lenh kill UI de reset
 # Kill mọi tiến trình đang giữ port 8188 (ComfyUI cũ), rồi khởi động lại
 Get-NetTCPConnection -LocalPort 8188 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
-cd "D:\baitap\code py\formyhorny\ComfyUI"
+cd "D:\baitap\code py\formyhorny\project\ComfyUI"
 python main.py --lowvram
 
 lenh khoi dong main dung
 taskkill /F /IM python.exe
-cd "D:\baitap\code py\formyhorny\ComfyUI"
+cd "D:\baitap\code py\formyhorny\project\ComfyUI"
 python main.py --lowvram
 
 lenh khoi dong app
-cd "D:\baitap\code py\formyhorny"
+cd "D:\baitap\code py\formyhorny\project" 
+python app_gradio.py
+
+lenh xac nhan khi khoi dong main
+python -m py_compile app_gradio.py
 python app_gradio.py
