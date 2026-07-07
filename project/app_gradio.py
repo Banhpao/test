@@ -51,69 +51,22 @@ import httpx, json, uuid, time, io, random, os, re, inspect, base64
 #   $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"
 COMFY_LONG_TIMEOUT_SEC = int(os.getenv("YUMEAI_COMFY_TIMEOUT_SEC", "1800"))
 
-# V8.12: Resource Guard / Low-VRAM safety config
-# Có thể chỉnh trong PowerShell trước khi chạy app:
-#   $env:YUMEAI_LOW_VRAM_MODE="1"              # 1=giảm tải, 0=giữ như cũ
-#   $env:YUMEAI_FLUX_SAFE_STEPS="24"           # cap steps cho Flux thường
-#   $env:YUMEAI_GARMENT_SAFE_STEPS="24"        # cap steps cho teacher/garment pipeline
-#   $env:YUMEAI_TEACHER_RETRY_MAX="0"          # 0=không retry tự động để tránh chạy chồng lâu
-#   $env:YUMEAI_RESOURCE_GUARD="1"             # 1=chỉ cho 1 job ComfyUI chạy cùng lúc
-#   $env:YUMEAI_STYLE_INTENT_GUARD="1"        # 1=tự chặn chibi ngoài ý muốn; vẫn cho phép nếu user nói rõ chibi
-#   $env:YUMEAI_GARMENT_SOFT_REFERENCE="1"     # 1=ảnh outfit chỉ là tham chiếu quần áo, không copy dáng/tỉ lệ
-#   $env:YUMEAI_GARMENT_PRESERVE_GUIDANCE="4.2" # guidance mềm cho đổi đồ giữ dáng
-#   $env:YUMEAI_GARMENT_PRESERVE_DENOISE="0.78" # denoise thấp hơn để không ăn sâu vào ảnh
-#   V8.15: đồng bộ prompt chat / ô EN / ghép lệnh / mặc theo ảnh để tránh mỗi chỗ một lệnh
-
-def _env_bool(name: str, default: bool = True) -> bool:
-    v = str(os.getenv(name, "1" if default else "0")).strip().lower()
-    return v not in {"0", "false", "off", "no", "n"}
-
-
-def _env_int(name: str, default: int, *, lo: int = None, hi: int = None) -> int:
-    try:
-        v = int(os.getenv(name, str(default)))
-    except Exception:
-        v = int(default)
-    if lo is not None:
-        v = max(lo, v)
-    if hi is not None:
-        v = min(hi, v)
-    return v
-
-
-def _env_float(name: str, default: float, *, lo: float = None, hi: float = None) -> float:
-    try:
-        v = float(os.getenv(name, str(default)))
-    except Exception:
-        v = float(default)
-    if lo is not None:
-        v = max(lo, v)
-    if hi is not None:
-        v = min(hi, v)
-    return v
-
-
-YUMEAI_LOW_VRAM_MODE = _env_bool("YUMEAI_LOW_VRAM_MODE", True)
-YUMEAI_RESOURCE_GUARD = _env_bool("YUMEAI_RESOURCE_GUARD", True)
-YUMEAI_FLUX_SAFE_STEPS = _env_int("YUMEAI_FLUX_SAFE_STEPS", 24, lo=8, hi=40)
-YUMEAI_GARMENT_SAFE_STEPS = _env_int("YUMEAI_GARMENT_SAFE_STEPS", 24, lo=8, hi=40)
-YUMEAI_TEACHER_RETRY_MAX = _env_int("YUMEAI_TEACHER_RETRY_MAX", 0 if YUMEAI_LOW_VRAM_MODE else 1, lo=0, hi=1)
-YUMEAI_STYLE_INTENT_GUARD = _env_bool("YUMEAI_STYLE_INTENT_GUARD", True)
-YUMEAI_GARMENT_SOFT_REFERENCE = _env_bool("YUMEAI_GARMENT_SOFT_REFERENCE", True)
-YUMEAI_GARMENT_PRESERVE_GUIDANCE = _env_float("YUMEAI_GARMENT_PRESERVE_GUIDANCE", 4.2, lo=1.0, hi=5.8)
-YUMEAI_GARMENT_PRESERVE_DENOISE = _env_float("YUMEAI_GARMENT_PRESERVE_DENOISE", 0.78, lo=0.45, hi=1.0)
-
-
-def _resource_safe_steps(requested_steps, *, kind: str = "flux") -> int:
-    """V8.12: cap steps để Flux/Kontext không ép laptop 4GB VRAM chạy quá lâu."""
-    steps = max(8, min(40, int(requested_steps)))
-    if not YUMEAI_LOW_VRAM_MODE:
-        return steps
-    cap = YUMEAI_GARMENT_SAFE_STEPS if kind in {"garment", "teacher"} else YUMEAI_FLUX_SAFE_STEPS
-    capped = max(8, min(steps, int(cap)))
-    if capped < steps:
-        print(f"🛡️ V8.12 low-VRAM: cap {kind} steps {steps} → {capped}")
-    return capped
+# V8.12: Resource Guard / Low-VRAM safety config — ĐÃ CHUYỂN sang yumeai/core/runtime.py
+# để app_gradio.py và main.py dùng chung 1 bản duy nhất, không lệch pha khi sửa.
+# Các biến $env:YUMEAI_LOW_VRAM_MODE, YUMEAI_FLUX_SAFE_STEPS, v.v. vẫn hoạt động y hệt cũ,
+# xem chi tiết trong docstring của yumeai/core/runtime.py
+from project.yumeai.core.runtime import (
+    YUMEAI_LOW_VRAM_MODE,
+    YUMEAI_STYLE_INTENT_GUARD,
+    YUMEAI_GARMENT_SOFT_REFERENCE,
+    YUMEAI_GARMENT_PRESERVE_GUIDANCE,
+    YUMEAI_GARMENT_PRESERVE_DENOISE,
+    YUMEAI_TEACHER_RETRY_MAX,
+    _resource_safe_steps,
+    guarded_submit_workflow,
+    guarded_poll_and_download,
+    ResourceBusyError,
+)
 from PIL import Image, ImageFilter
 import numpy as np
 
@@ -139,78 +92,26 @@ from yumeai.services.comfy_service import (
     pick_controlnet,
     pick_ipadapter,
     upload_image_to_comfy,
-    submit_workflow,
-    poll_and_download,
     get_reactor_available,
     get_upscale_models,
+    build_quality_workflow,
 )
 
 
 # ══════════════════════════════════
-# V8.12 RESOURCE GUARD — chống quá tải/chồng job ComfyUI
+# Resource Guard: bọc lại guarded_submit_workflow/guarded_poll_and_download
+# bằng gr.Error (đặc thù Gradio) — bản gốc trong runtime.py không phụ thuộc
+# gradio để main.py (FastAPI) dùng chung được mà không cần cài gradio.
 # ══════════════════════════════════
-_raw_submit_workflow = submit_workflow
-_raw_poll_and_download = poll_and_download
-_YUMEAI_JOB_LOCK = threading.RLock()
-_YUMEAI_JOB_STATE = {"owner": None, "label": "", "start": 0.0, "depth": 0}
-
-
-def _acquire_yumeai_generation_slot(label: str = "ComfyUI workflow") -> bool:
-    """Non-blocking lock: đang có job thì báo bận, không gửi thêm workflow mới."""
-    if not YUMEAI_RESOURCE_GUARD:
-        return False
-    tid = threading.get_ident()
-    if _YUMEAI_JOB_STATE.get("owner") == tid:
-        _YUMEAI_JOB_STATE["depth"] += 1
-        return True
-    if not _YUMEAI_JOB_LOCK.acquire(blocking=False):
-        active = _YUMEAI_JOB_STATE.get("label") or "ComfyUI workflow"
-        elapsed = int(max(0, time.time() - float(_YUMEAI_JOB_STATE.get("start") or time.time())))
-        raise gr.Error(
-            f"⚠️ YumeAI đang xử lý job khác: {active} ({elapsed}s).\n"
-            "Để tránh tràn VRAM/RAM hoặc reset máy, chị đã chặn gửi thêm job ComfyUI. "
-            "Đợi job hiện tại xong rồi bấm Gửi lại nha."
-        )
-    _YUMEAI_JOB_STATE.update({"owner": tid, "label": label, "start": time.time(), "depth": 1})
-    print(f"🛡️ V8.12 Resource Guard: START {label}")
-    return True
-
-
-def _release_yumeai_generation_slot() -> None:
-    if not YUMEAI_RESOURCE_GUARD:
-        return
-    tid = threading.get_ident()
-    if _YUMEAI_JOB_STATE.get("owner") != tid:
-        return
-    _YUMEAI_JOB_STATE["depth"] = max(0, int(_YUMEAI_JOB_STATE.get("depth") or 1) - 1)
-    if _YUMEAI_JOB_STATE["depth"] > 0:
-        return
-    label = _YUMEAI_JOB_STATE.get("label") or "ComfyUI workflow"
-    elapsed = int(max(0, time.time() - float(_YUMEAI_JOB_STATE.get("start") or time.time())))
-    _YUMEAI_JOB_STATE.update({"owner": None, "label": "", "start": 0.0, "depth": 0})
-    try:
-        _YUMEAI_JOB_LOCK.release()
-    except RuntimeError:
-        pass
-    print(f"🛡️ V8.12 Resource Guard: END {label} ({elapsed}s)")
-
-
 def submit_workflow(workflow, *args, **kwargs):
-    """Wrapper giữ nguyên tên cũ để toàn file tự được bảo vệ."""
-    _acquire_yumeai_generation_slot("ComfyUI workflow")
     try:
-        return _raw_submit_workflow(workflow, *args, **kwargs)
-    except Exception:
-        _release_yumeai_generation_slot()
-        raise
+        return guarded_submit_workflow(workflow, *args, **kwargs)
+    except ResourceBusyError as e:
+        raise gr.Error(str(e))
 
 
 def poll_and_download(*args, **kwargs):
-    """Luôn nhả lock kể cả khi timeout/lỗi để app không bị kẹt trạng thái bận."""
-    try:
-        return _raw_poll_and_download(*args, **kwargs)
-    finally:
-        _release_yumeai_generation_slot()
+    return guarded_poll_and_download(*args, **kwargs)
 
 
 
@@ -247,86 +148,6 @@ def chat_fn(message, history):
 # ══════════════════════════════════
 # TEXT2IMG
 # ══════════════════════════════════
-def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscale, width=512, height=768, latent_source=None):
-    """
-    Build workflow SD với quality settings và optional upscaler.
-    latent_source: None = EmptyLatentImage (text2img), tuple = (node_id, slot) cho img2img
-    """
-    # SDXL cần độ phân giải cao hơn (native 1024); dưới 768 sẽ méo
-    if _is_sdxl(model):
-        if width  < 768: width  = 768
-        if height < 768: height = 768
-        print(f"  [SDXL] resolution → {width}x{height}")
-
-    # Sampler settings theo quality
-    q_settings = {
-        "Nhanh (20 steps)":  {"steps": 20, "cfg": 7.0, "sampler": "euler",         "scheduler": "normal"},
-        "Cân bằng (28 steps)":{"steps": 28, "cfg": 7.5, "sampler": "dpm_2",         "scheduler": "karras"},
-        "Cao (35 steps)":    {"steps": 35, "cfg": 8.0, "sampler": "dpm_2_ancestral","scheduler": "karras"},
-        "Tốt nhất (50 steps)":{"steps":50, "cfg": 8.5, "sampler": "dpm_2_ancestral","scheduler": "karras"},
-    }.get(quality, {"steps": 28, "cfg": 7.5, "sampler": "euler", "scheduler": "normal"})
-
-    wf = {
-        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
-        "2": {"class_type": "CLIPTextEncode",         "inputs": {"text": full_prompt, "clip": ["1", 1]}},
-        "3": {"class_type": "CLIPTextEncode",         "inputs": {"text": neg_prompt,  "clip": ["1", 1]}},
-    }
-
-    # Latent source
-    if latent_source:
-        wf["4"] = {"class_type": "VAEEncode", "inputs": {"pixels": [latent_source[0], latent_source[1]], "vae": ["1", 2]}}
-        latent_node = "4"
-        denoise = 0.75
-    else:
-        wf["4"] = {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}}
-        latent_node = "4"
-        denoise = 1.0
-
-    wf["5"] = {"class_type": "KSampler", "inputs": {
-        "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
-        "latent_image": [latent_node, 0], "seed": seed,
-        "steps":    q_settings["steps"],
-        "cfg":      q_settings["cfg"],
-        "sampler_name": q_settings["sampler"],
-        "scheduler":    q_settings["scheduler"],
-        "denoise":  denoise
-    }}
-    wf["6"] = {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}}
-
-    if upscale == "2x (ESRGAN)":
-        # Tự động lấy model ESRGAN có sẵn thay vì hardcode tên
-        up_models = get_upscale_models()
-        if up_models:
-            up_m = next((m for m in up_models if "anime" in m.lower()), up_models[0])
-            wf["7"]  = {"class_type": "UpscaleModelLoader",   "inputs": {"model_name": up_m}}
-            wf["8"]  = {"class_type": "ImageUpscaleWithModel","inputs": {"upscale_model": ["7", 0], "image": ["6", 0]}}
-            wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "yumeai_up"}}
-        else:
-            # Fallback nếu chưa có ESRGAN model
-            print("⚠️ Chưa có ESRGAN model, bỏ qua upscale")
-            wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "yumeai"}}
-    elif upscale == "1.5x (Latent)":
-        # Hires fix — upscale trong latent space
-        wf["7"] = {"class_type": "LatentUpscale", "inputs": {
-            "samples": ["5", 0], "upscale_method": "bicubic",
-            "width": int(width * 1.5), "height": int(height * 1.5), "crop": "disabled"
-        }}
-        wf["8"] = {"class_type": "KSampler", "inputs": {
-            "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
-            "latent_image": ["7", 0], "seed": seed + 1,
-            "steps": 15, "cfg": q_settings["cfg"],
-            "sampler_name": q_settings["sampler"], "scheduler": q_settings["scheduler"],
-            "denoise": 0.5
-        }}
-        wf["9"] = {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["1", 2]}}
-        wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "yumeai_hires"}}
-    else:
-        # Không upscale
-        wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "yumeai"}}
-
-    return wf
-
-
 def generate_image_fn(prompt, style, quality, upscale, progress=gr.Progress()):
     if not prompt.strip():
         raise gr.Error("Hãy nhập mô tả!")

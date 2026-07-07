@@ -1,0 +1,14 @@
+# YumeAI — dependencies cho app_gradio.py + main.py + yumeai/ package
+# (ComfyUI cài riêng theo hướng dẫn của ComfyUI, không nằm trong file này)
+
+gradio
+fastapi
+uvicorn
+httpx
+pydantic
+pillow
+numpy
+
+# Cross-process Resource Guard (chặn tràn VRAM khi app_gradio.py và main.py
+# chạy song song 2 tiến trình riêng biệt) — xem yumeai/core/runtime.py
+filelock

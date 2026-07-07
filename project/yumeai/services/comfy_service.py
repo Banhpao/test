@@ -251,6 +251,81 @@ def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300)
         progress(1.0, desc="✅ Xong!")
     return img
 
+def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscale,
+                            width=512, height=768, latent_source=None) -> dict:
+    """
+    Build workflow SD với quality settings và optional upscaler.
+    (Chuyển từ app_gradio.py sang đây để main.py dùng chung, không tự định nghĩa lại.)
+    latent_source: None = EmptyLatentImage (text2img), tuple = (node_id, slot) cho img2img
+    """
+    if _is_sdxl(model):
+        if width  < 768: width  = 768
+        if height < 768: height = 768
+        print(f"  [SDXL] resolution → {width}x{height}")
+
+    q_settings = {
+        "Nhanh (20 steps)":   {"steps": 20, "cfg": 7.0, "sampler": "euler",          "scheduler": "normal"},
+        "Cân bằng (28 steps)":{"steps": 28, "cfg": 7.5, "sampler": "dpm_2",          "scheduler": "karras"},
+        "Cao (35 steps)":     {"steps": 35, "cfg": 8.0, "sampler": "dpm_2_ancestral","scheduler": "karras"},
+        "Tốt nhất (50 steps)":{"steps": 50, "cfg": 8.5, "sampler": "dpm_2_ancestral","scheduler": "karras"},
+    }.get(quality, {"steps": 28, "cfg": 7.5, "sampler": "euler", "scheduler": "normal"})
+
+    wf = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
+        "2": {"class_type": "CLIPTextEncode",         "inputs": {"text": full_prompt, "clip": ["1", 1]}},
+        "3": {"class_type": "CLIPTextEncode",         "inputs": {"text": neg_prompt,  "clip": ["1", 1]}},
+    }
+
+    if latent_source:
+        wf["4"] = {"class_type": "VAEEncode", "inputs": {"pixels": [latent_source[0], latent_source[1]], "vae": ["1", 2]}}
+        latent_node = "4"
+        denoise = 0.75
+    else:
+        wf["4"] = {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}}
+        latent_node = "4"
+        denoise = 1.0
+
+    wf["5"] = {"class_type": "KSampler", "inputs": {
+        "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
+        "latent_image": [latent_node, 0], "seed": seed,
+        "steps":    q_settings["steps"],
+        "cfg":      q_settings["cfg"],
+        "sampler_name": q_settings["sampler"],
+        "scheduler":    q_settings["scheduler"],
+        "denoise":  denoise
+    }}
+    wf["6"] = {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}}
+
+    if upscale == "2x (ESRGAN)":
+        up_models = get_upscale_models()
+        if up_models:
+            up_m = next((m for m in up_models if "anime" in m.lower()), up_models[0])
+            wf["7"]  = {"class_type": "UpscaleModelLoader",   "inputs": {"model_name": up_m}}
+            wf["8"]  = {"class_type": "ImageUpscaleWithModel","inputs": {"upscale_model": ["7", 0], "image": ["6", 0]}}
+            wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "yumeai_up"}}
+        else:
+            print("⚠️ Chưa có ESRGAN model, bỏ qua upscale")
+            wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "yumeai"}}
+    elif upscale == "1.5x (Latent)":
+        wf["7"] = {"class_type": "LatentUpscale", "inputs": {
+            "samples": ["5", 0], "upscale_method": "bicubic",
+            "width": int(width * 1.5), "height": int(height * 1.5), "crop": "disabled"
+        }}
+        wf["8"] = {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
+            "latent_image": ["7", 0], "seed": seed + 1,
+            "steps": 15, "cfg": q_settings["cfg"],
+            "sampler_name": q_settings["sampler"], "scheduler": q_settings["scheduler"],
+            "denoise": 0.5
+        }}
+        wf["9"] = {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["1", 2]}}
+        wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "yumeai_hires"}}
+    else:
+        wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "yumeai"}}
+
+    return wf
+
+
 def get_reactor_available() -> bool:
     try:
         with httpx.Client(timeout=5) as c:
