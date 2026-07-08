@@ -44,18 +44,18 @@ def _fx():
         lg.addFilter(f)
 threading.Thread(target=lambda: (_fx(), __import__('time').sleep(2), _fx()), daemon=True).start()
 
-import httpx, json, uuid, time, io, random, os, re, inspect, base64
+import httpx, json, uuid, time, io, random, re, inspect, base64
 
-# V8.10: ComfyUI long timeout config
-# Có thể chỉnh trong PowerShell trước khi chạy app:
-#   $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"
-COMFY_LONG_TIMEOUT_SEC = int(os.getenv("YUMEAI_COMFY_TIMEOUT_SEC", "1800"))
+# V8.10: ComfyUI long timeout config — nguồn DUY NHẤT ở yumeai/core/config.py
+# (COMFY_TIMEOUT_SEC), app_gradio.py và main.py dùng chung để không lệch pha.
+# Chỉnh qua PowerShell: $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"
+from yumeai.core.config import COMFY_TIMEOUT_SEC as COMFY_LONG_TIMEOUT_SEC, VERIFY_TIMEOUT_SEC
 
 # V8.12: Resource Guard / Low-VRAM safety config — ĐÃ CHUYỂN sang yumeai/core/runtime.py
 # để app_gradio.py và main.py dùng chung 1 bản duy nhất, không lệch pha khi sửa.
 # Các biến $env:YUMEAI_LOW_VRAM_MODE, YUMEAI_FLUX_SAFE_STEPS, v.v. vẫn hoạt động y hệt cũ,
 # xem chi tiết trong docstring của yumeai/core/runtime.py
-from project.yumeai.core.runtime import (
+from yumeai.core.runtime import (
     YUMEAI_LOW_VRAM_MODE,
     YUMEAI_STYLE_INTENT_GUARD,
     YUMEAI_GARMENT_SOFT_REFERENCE,
@@ -83,6 +83,7 @@ from yumeai.services.ollama_service import (
     enrich_for_create,
 )
 from yumeai.services.comfy_service import (
+    ComfyUIError,
     _fetch_model_list,
     _is_sdxl,
     get_checkpoint_model,
@@ -91,7 +92,7 @@ from yumeai.services.comfy_service import (
     get_clipvision_models,
     pick_controlnet,
     pick_ipadapter,
-    upload_image_to_comfy,
+    upload_image_to_comfy as _raw_upload_image_to_comfy,
     get_reactor_available,
     get_upscale_models,
     build_quality_workflow,
@@ -108,41 +109,24 @@ def submit_workflow(workflow, *args, **kwargs):
         return guarded_submit_workflow(workflow, *args, **kwargs)
     except ResourceBusyError as e:
         raise gr.Error(str(e))
+    except ComfyUIError as e:
+        raise gr.Error(str(e))
 
 
 def poll_and_download(*args, **kwargs):
-    return guarded_poll_and_download(*args, **kwargs)
-
-
-
-# ══════════════════════════════════
-# CHAT
-# ══════════════════════════════════
-def chat_fn(message, history):
-    if not message.strip():
-        yield ""; return
-    messages = [{"role": "system", "content": PERSONA["system"]}]
-    for u, b in history:
-        messages.append({"role": "user", "content": u})
-        if b: messages.append({"role": "assistant", "content": b})
-    messages.append({"role": "user", "content": message})
-    partial = ""
     try:
-        with httpx.Client(timeout=180) as c:
-            with c.stream("POST", f"{OLLAMA_URL}/api/chat", json={
-                "model": OLLAMA_MODEL, "messages": messages,
-                "stream": True, "options": {"temperature": 0.85, "num_predict": 250}
-            }) as resp:
-                for line in resp.iter_lines():
-                    if not line: continue
-                    try:
-                        d = json.loads(line)
-                        partial += d.get("message", {}).get("content", "")
-                        yield partial
-                        if d.get("done"): return
-                    except: continue
-    except Exception as e:
-        yield f"⚠️ {e}"
+        return guarded_poll_and_download(*args, **kwargs)
+    except ComfyUIError as e:
+        raise gr.Error(str(e))
+
+
+def upload_image_to_comfy(img):
+    """Bọc bản gốc trong comfy_service: đổi ComfyUIError (framework-agnostic) sang
+    gr.Error để Gradio hiện đúng thông báo lỗi cho người dùng."""
+    try:
+        return _raw_upload_image_to_comfy(img)
+    except ComfyUIError as e:
+        raise gr.Error(str(e))
 
 
 # ══════════════════════════════════
@@ -174,68 +158,9 @@ def generate_image_fn(prompt, style, quality, upscale, progress=gr.Progress()):
 
     progress(0.3, desc="📤 Gửi lệnh...")
     pid = submit_workflow(workflow)
-    img = poll_and_download(pid, progress, 0.3)
+    img = poll_and_download(pid, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = f"✨ {prompt}\n🔤 {en_tags}\n🎨 {style} | ⚙️ {quality} | 🔍 {upscale}\n🎲 seed: {seed}"
     return img, info
-
-
-# ══════════════════════════════════
-# IMG2IMG
-# ══════════════════════════════════
-def img2img_fn(input_image, prompt, strength, style, quality, upscale, progress=gr.Progress()):
-    if input_image is None: raise gr.Error("Upload ảnh trước!")
-    if not prompt.strip():  raise gr.Error("Nhập mô tả!")
-
-    progress(0.05, desc="🔤 Đang dịch...")
-    en_tags = translate_vi_en(prompt)
-
-    style_tags = {
-        "Anime":    "anime style, 2d illustration, vibrant colors",
-        "Realistic":"photorealistic, 8k, detailed, cinematic",
-        "Semi":     "semi-realistic, digital art, painterly",
-        "Giữ nguyên style": "",
-    }.get(style, "")
-
-    progress(0.1, desc="📤 Upload ảnh...")
-    img = input_image.convert("RGB")
-    img.thumbnail((768, 768))
-    uploaded = upload_image_to_comfy(img)
-
-    progress(0.2, desc="📦 Chuẩn bị model...")
-    model = get_checkpoint_model(style=style)
-    if not model: raise gr.Error("Không tìm thấy model!")
-    print(f"🎨 img2img: {model}, strength={strength}, quality={quality}")
-
-    all_tags = ", ".join(filter(None, [en_tags, style_tags]))
-    full_prompt = f"{all_tags}, masterpiece, best quality, highly detailed, sharp focus"
-    neg_prompt  = "worst quality, low quality, blurry, deformed, ugly, watermark, jpeg artifacts"
-    seed = random.randint(1, 2**31)
-
-    # Workflow img2img: node "L" load ảnh, node "V" encode latent
-    base_wf = {
-        "L": {"class_type": "LoadImage", "inputs": {"image": uploaded}},
-    }
-    quality_wf = build_quality_workflow(
-        model, full_prompt, neg_prompt, seed, quality, upscale,
-        latent_source=("L", 0)
-    )
-    # Override denoise theo strength của user
-    for node in quality_wf.values():
-        if node.get("class_type") == "KSampler":
-            node["inputs"]["denoise"] = float(strength)
-            break
-
-    workflow = {**base_wf, **quality_wf}
-
-    progress(0.3, desc="📤 Gửi lệnh...")
-    pid = submit_workflow(workflow)
-    result = poll_and_download(pid, progress, 0.3)
-    info = (f"✨ {prompt}\n🔤 {en_tags}\n"
-            f"💪 Strength: {strength} | 🎨 {style}\n"
-            f"⚙️ {quality} | 🔍 {upscale} | 🎲 seed: {seed}")
-    return result, info
-
-
 
 
 # ══════════════════════════════════
@@ -470,7 +395,7 @@ def controlnet_fn(input_image, prompt, cn_mode, cn_strength, face_strength,
 
     progress(0.3, desc=f"📤 Gửi lệnh ({mode_desc})...")
     pid = submit_workflow(workflow)
-    result = poll_and_download(pid, progress, 0.3)
+    result = poll_and_download(pid, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
 
     info = (f"✨ {prompt}\n🔤 {en_tags}\n⚙️ {mode_desc}\n"
             f"🎛️ CN:{cn_strength}"+(f" | Face:{face_strength}" if use_ipadapter else "")+
@@ -611,6 +536,95 @@ AUTO_PRESETS = {
 }
 
 
+def run_multichar_2pass_clothes_edit(
+    character_image, prompt, *,
+    scene_desc_en, outfit_caption_en="", remove_list=None,
+    guidance=4.8, steps=32, lora_strength=1.0, progress=None,
+    header_label="Đổi đồ nhiều nhân vật (2-pass safe-commit)",
+    vision_meta="",
+):
+    """
+    HÀM DÙNG CHUNG cho mọi đường đổi đồ đa nhân vật (2 người trái/phải).
+    Chia edit thành 2 lượt tuần tự THEO NHÂN VẬT (trái → phải), mỗi lượt Flux chỉ
+    tập trung đúng 1 người → tránh chuyện bỏ sót nhân vật khi ép đổi cả 2 trong 1 pass.
+    Mỗi lượt đều qua safe-commit của run_flux_teacher_v7 (verify + rollback nếu fail).
+
+    Trước đây logic này bị nhốt riêng trong _garment_transfer_runner và chỉ chạy khi
+    CÓ ảnh outfit. Nay tách ra để cả:
+      - đổi đồ bằng text thuần trên chat (outfit_caption_en="")
+      - mặc theo ảnh trang phục (outfit_caption_en=<caption>)
+    đều dùng chung 1 pipeline, không lệch nhau.
+
+    Trả về (image, info).
+    """
+    remove_list = remove_list or []
+    base_image = character_image
+
+    # ===== PASS 1/2: NHÂN VẬT BÊN TRÁI =====
+    if progress:
+        progress(0.10, desc="🪄 Pass 1/2: nhân vật bên trái...")
+    left_plan = build_teacher_plan_json(prompt, scene_desc_en=scene_desc_en, outfit_caption_en=outfit_caption_en, scope="left")
+    left_inst = (
+        compile_teacher_instruction(left_plan) + " "
+        + build_source_only_cleanup_instruction(remove_list, "left")
+        + " Keep the right character unchanged in this pass. Keep exactly the same number of visible characters as the input image. Do not remove or hide any character. Only edit the left character clothing region."
+    )
+    img1, info1 = run_flux_teacher_v7(
+        character_image, prompt, left_inst,
+        progress=progress,
+        guidance=max(5.1, float(guidance)),
+        steps=max(36, int(steps)),
+        lora_strength=lora_strength,
+        scope="left",
+        outfit_caption_en=outfit_caption_en,
+        scene_desc_en=scene_desc_en,
+        auto_verify=True,
+    )
+    if "SAFE-COMMIT REJECT" in (info1 or ""):
+        header = f"👕 {header_label} — stop after LEFT pass\n{vision_meta}"
+        return base_image, header + "\n=== PASS LEFT ===\n" + info1
+    last_good_image = img1
+
+    # ===== PASS 2/2: NHÂN VẬT BÊN PHẢI =====
+    if progress:
+        progress(0.55, desc="🪄 Pass 2/2: nhân vật bên phải...")
+    # Đọc lại scene SAU pass trái để anchor pass phải không bị lệch (V8.11)
+    scene_desc_en2, _ = describe_scene_image(last_good_image, prompt)
+    scene_desc_for_pass2 = scene_desc_en2 or scene_desc_en
+    right_plan = build_teacher_plan_json(prompt, scene_desc_en=scene_desc_for_pass2, outfit_caption_en=outfit_caption_en, scope="right")
+    right_inst = (
+        compile_teacher_instruction(right_plan) + " "
+        + build_source_only_cleanup_instruction(remove_list, "right")
+        + " Keep the left character's new clothes unchanged in this pass. Keep exactly the same number of visible characters as the input image. Do not remove or hide any character. Only edit the right character clothing region."
+    )
+    img2, info2 = run_flux_teacher_v7(
+        last_good_image, prompt, right_inst,
+        progress=progress,
+        guidance=max(5.2, float(guidance)),
+        steps=max(36, int(steps)),
+        lora_strength=lora_strength,
+        scope="right",
+        outfit_caption_en=outfit_caption_en,
+        scene_desc_en=scene_desc_for_pass2,
+        auto_verify=True,
+    )
+    if "SAFE-COMMIT REJECT" in (info2 or ""):
+        header = f"👕 {header_label} — stop after RIGHT pass\n{vision_meta}↩️ Trả lại ảnh sau PASS LEFT vì PASS RIGHT chưa đạt.\n"
+        return last_good_image, header + "\n=== PASS LEFT ===\n" + info1 + "\n\n=== PASS RIGHT ===\n" + info2
+    last_good_image = img2
+
+    # ===== FINAL VERIFY (soft — cả 2 pass đã commit thành công) =====
+    final_verify = verify_image_edit_result(last_good_image, prompt, scope="all", outfit_caption_en=outfit_caption_en, scene_desc_en=scene_desc_en, original_image=character_image)
+    final_verify_note = final_verify
+    if not bool(final_verify.get("success")):
+        final_verify_note = dict(final_verify)
+        final_verify_note["soft_success"] = True
+        final_verify_note["reason"] = str(final_verify_note.get("reason", "")) + " | advisory only: cả LEFT và RIGHT pass đều đã commit thành công nên final_verify chỉ mang tính tham khảo."
+    header = f"👕 {header_label} (multi-character 2-pass safe-commit)\n{vision_meta}"
+    info = header + "\n=== PASS LEFT ===\n" + info1 + "\n\n=== PASS RIGHT ===\n" + info2 + f"\n\n🧪 final_verify: {final_verify_note}"
+    return last_good_image, info
+
+
 def build_smart_runners(
     *,
     use_ip=True,
@@ -698,6 +712,27 @@ def build_smart_runners(
                 if progress:
                     progress(0.04, desc="🧭 V7: phân tích ảnh hiện tại...")
                 scene_desc_en, scene_model = describe_scene_image(input_image, prompt)
+                n_chars = _estimate_visible_character_count(scene_desc_en)
+
+                # V8.16: đổi đồ bằng TEXT trên chat mà ảnh có >=2 nhân vật → dùng CHUNG
+                # pipeline 2-pass theo nhân vật (trước đây chỉ đường "mặc theo ảnh" mới có).
+                # Đây là mấu chốt: 1 prompt kiểu ChatGPT giờ cũng tự chia trái/phải để không bỏ sót ai.
+                if n_chars >= 2:
+                    print(f"🧩 V8.16 multi-char TEXT clothes edit → 2-pass ({scene_model or 'no-vision'}), n={n_chars}")
+                    return run_multichar_2pass_clothes_edit(
+                        input_image, prompt,
+                        scene_desc_en=scene_desc_en,
+                        outfit_caption_en="",
+                        remove_list=infer_source_only_remove_list(scene_desc_en, "", prompt),
+                        guidance=flux_guidance,
+                        steps=flux_steps,
+                        lora_strength=flux_lora_strength,
+                        progress=progress,
+                        header_label="Đổi đồ theo lệnh (text) — nhiều nhân vật",
+                        vision_meta=f"🧭 scene_vision:{scene_model}\n🧩 visible_characters:{n_chars}\n",
+                    )
+
+                # 1 nhân vật → single pass như cũ
                 plan = build_teacher_plan_json(prompt, scene_desc_en=scene_desc_en, outfit_caption_en="", scope="all")
                 instruction_en = compile_teacher_instruction(plan)
                 print(f"🧠 V7 teacher plan ({scene_model or 'no-vision'}): {json.dumps(plan, ensure_ascii=False)}")
@@ -769,83 +804,25 @@ def build_smart_runners(
         try:
             n_chars = _estimate_visible_character_count(scene_desc_en)
             if scope == "all" and n_chars >= 2 and outfit_caption_en:
-                base_image = character_image
-                last_good_image = character_image
-                if progress:
-                    progress(0.10, desc="🪄 V8.10: pass 1/2 cho nhân vật bên trái...")
-                left_plan = build_teacher_plan_json(prompt, scene_desc_en=scene_desc_en, outfit_caption_en=outfit_caption_en, scope="left")
-                left_inst = compile_teacher_instruction(left_plan) + " " + build_source_only_cleanup_instruction(remove_list, "left") + " Keep the right character unchanged in this pass. Keep exactly the same number of visible characters as the input image. Do not remove or hide any character. Only edit the left character clothing region."
-                img1, info1 = run_flux_teacher_v7(
-                    character_image,
-                    prompt,
-                    left_inst,
-                    progress=progress,
-                    guidance=max(5.1, float(flux_guidance)),
-                    steps=max(36, int(flux_steps)),
-                    lora_strength=flux_lora_strength,
-                    scope="left",
-                    outfit_caption_en=outfit_caption_en,
-                    scene_desc_en=scene_desc_en,
-                    auto_verify=True,
-                )
-                if "SAFE-COMMIT REJECT" in (info1 or ""):
-                    header = (
-                        f"👕 Mặc theo ảnh/trang phục (V8.10 safe-commit stop after LEFT pass)\n"
-                        f"🎯 Scope: {_scope_label_vi(scope)}\n"
-                        f"🧭 scene_vision:{scene_model}\n"
-                        f"👁️ outfit_vision:{vision_model or 'none'}\n"
-                        f"⚠️ same_reference:{same_image}\n📌 outfit_caption_empty:{not bool(outfit_caption_en)}\n🧼 remove_list:{remove_list}\n"
-                    )
-                    return base_image, header + "\n=== PASS LEFT ===\n" + info1
-                last_good_image = img1
-
-                if progress:
-                    progress(0.55, desc="🪄 V8.10: pass 2/2 cho nhân vật bên phải...")
-                scene_desc_en2, scene_model2 = describe_scene_image(last_good_image, prompt)
-                scene_desc_for_pass2 = scene_desc_en2 or scene_desc_en  # V8.11: dùng scene sau PASS LEFT để tránh anchor cũ làm pass phải bị lệch
-                right_plan = build_teacher_plan_json(prompt, scene_desc_en=scene_desc_for_pass2, outfit_caption_en=outfit_caption_en, scope="right")
-                right_inst = compile_teacher_instruction(right_plan) + " " + build_source_only_cleanup_instruction(remove_list, "right") + " Keep the left character's new clothes unchanged in this pass. Keep exactly the same number of visible characters as the input image. Do not remove or hide any character. Only edit the right character clothing region."
-                img2, info2 = run_flux_teacher_v7(
-                    last_good_image,
-                    prompt,
-                    right_inst,
-                    progress=progress,
-                    guidance=max(5.2, float(flux_guidance)),
-                    steps=max(36, int(flux_steps)),
-                    lora_strength=flux_lora_strength,
-                    scope="right",
-                    outfit_caption_en=outfit_caption_en,
-                    scene_desc_en=scene_desc_for_pass2,
-                    auto_verify=True,
-                )
-                if "SAFE-COMMIT REJECT" in (info2 or ""):
-                    header = (
-                        f"👕 Mặc theo ảnh/trang phục (V8.10 safe-commit stop after RIGHT pass)\n"
-                        f"🎯 Scope: {_scope_label_vi(scope)}\n"
-                        f"🧭 scene_vision:{scene_model}\n"
-                        f"👁️ outfit_vision:{vision_model or 'none'}\n"
-                        f"⚠️ same_reference:{same_image}\n📌 outfit_caption_empty:{not bool(outfit_caption_en)}\n🧼 remove_list:{remove_list}\n"
-                        "↩️ Trả lại last_good_image sau PASS LEFT vì PASS RIGHT chưa đạt.\n"
-                    )
-                    return last_good_image, header + "\n=== PASS LEFT ===\n" + info1 + "\n\n=== PASS RIGHT ===\n" + info2
-                last_good_image = img2
-
-                final_verify = verify_image_edit_result(last_good_image, prompt, scope="all", outfit_caption_en=outfit_caption_en, scene_desc_en=scene_desc_en, original_image=character_image)
-                final_verify_note = final_verify
-                if not bool(final_verify.get("success")):
-                    final_verify_note = dict(final_verify)
-                    final_verify_note["soft_success"] = True
-                    final_verify_note["reason"] = str(final_verify_note.get("reason", "")) + " | V8.13 advisory only: both LEFT and RIGHT passes were already committed successfully, so final_verify is softened and does not mark the run as failed."
-                header = (
-                    f"👕 Mặc theo ảnh/trang phục (V8.13 teacher pipeline — multi-character 2-pass safe-commit + style intent guard)\n"
+                # V8.16: dùng CHUNG hàm 2-pass với đường chat text-only (trước đây là block riêng ở đây)
+                vision_meta = (
                     f"🎯 Scope: {_scope_label_vi(scope)}\n"
                     f"🧭 scene_vision:{scene_model}\n"
                     f"👁️ outfit_vision:{vision_model or 'none'}\n"
                     f"⚠️ same_reference:{same_image}\n📌 outfit_caption_empty:{not bool(outfit_caption_en)}\n🧼 remove_list:{remove_list}\n"
-                    "🛡️ final_cleanup_global: disabled (safe-commit mode)\n"
                 )
-                info = header + "\n=== PASS LEFT ===\n" + info1 + "\n\n=== PASS RIGHT ===\n" + info2 + f"\n\n🧪 final_verify: {final_verify_note}"
-                return last_good_image, info
+                return run_multichar_2pass_clothes_edit(
+                    character_image, prompt,
+                    scene_desc_en=scene_desc_en,
+                    outfit_caption_en=outfit_caption_en,
+                    remove_list=remove_list,
+                    guidance=flux_guidance,
+                    steps=flux_steps,
+                    lora_strength=flux_lora_strength,
+                    progress=progress,
+                    header_label="Mặc theo ảnh/trang phục",
+                    vision_meta=vision_meta,
+                )
 
             img, info = run_flux_teacher_v7(
                 character_image,
@@ -875,7 +852,6 @@ def build_smart_runners(
                 print(f"⏳ V8.12 teacher pipeline timeout — STOP, không fallback dây chuyền: {e}")
                 return character_image, _timeout_stop_info("teacher pipeline / Flux Kontext", e, scope=scope, steps=flux_steps)
             print(f"⚠️ V8.12 teacher pipeline lỗi → fallback garment latent HQ: {e}")
-
 
 
         # Fallback cuối: garment reference latent HQ CHỈ khi có outfit thật và caption outfit đọc được.
@@ -1179,7 +1155,7 @@ def get_segment_available() -> bool:
         with httpx.Client(timeout=5) as c:
             r = c.get(f"{COMFY_URL}/object_info/GroundingDinoSAMSegment (segment anything)")
             return "GroundingDinoSAMSegment (segment anything)" in r.json()
-    except:
+    except Exception:
         return False
 
 
@@ -1189,7 +1165,7 @@ def get_lama_available() -> bool:
         with httpx.Client(timeout=5) as c:
             r = c.get(f"{COMFY_URL}/object_info/INPAINT_InpaintWithModel")
             return "INPAINT_InpaintWithModel" in r.json()
-    except:
+    except Exception:
         return False
 
 
@@ -1306,10 +1282,13 @@ def inpaint_fn(input_image, action, target_vi, replacement_vi,
        - Fallback SD: VAEEncodeForInpaint + KSampler vẽ nền
     3. Thay vật: SD inpaint vẽ vật mới
     """
+    if input_image is None:
+        raise gr.Error("Chưa có ảnh để chỉnh sửa! Hãy tải/tạo ảnh trước khi xóa/thay vật thể.")
     if not get_segment_available():
         raise gr.Error(
-            "Chưa cài node Segment Anything!\n"
-            "Cần: git clone comfyui_segment_anything (xem hướng dẫn tôi gửi)."
+            "Không dùng được Segment Anything (GroundingDINO + SAM).\n"
+            "• Nếu ComfyUI CHƯA chạy: hãy bật ComfyUI rồi thử lại.\n"
+            "• Nếu ComfyUI đã chạy: cần cài node — git clone comfyui_segment_anything."
         )
 
     # Dịch tên vật thể sang English cho GroundingDINO
@@ -1374,7 +1353,9 @@ def inpaint_fn(input_image, action, target_vi, replacement_vi,
         method = "LaMa (lấp nền theo ngữ cảnh)"
     else:
         # ══ XÓA/THAY bằng SD inpaint ══
-        model = get_inpaint_model()
+        # Tôn trọng style người dùng chọn (trước đây bỏ trống → luôn dùng model Realistic,
+        # vá ảnh anime bằng checkpoint thực → lệch phong cách).
+        model = get_inpaint_model(style if style in ("Anime", "Realistic", "Semi") else "Realistic")
         if not model:
             raise gr.Error("Không tìm thấy checkpoint!")
         print(f"🎨 SD inpaint model: {model}")
@@ -1410,7 +1391,7 @@ def inpaint_fn(input_image, action, target_vi, replacement_vi,
     act_desc = f"Thay '{target_vi}' bằng '{replacement_vi}'" if action == "replace" else f"Xóa '{target_vi}'"
     progress(0.35, desc=f"🎨 {act_desc}...")
     pid = submit_workflow(workflow)
-    result = poll_and_download(pid, progress, 0.35, timeout=300)
+    result = poll_and_download(pid, progress, 0.35, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = f"✅ {act_desc}\n🎯 Phát hiện: {target_en}\n⚙️ {method}\n📐 {nw}x{nh} | 🎲 seed:{seed}"
     return result, info
 
@@ -1574,7 +1555,11 @@ Examples:
                       temperature=0.2, num_predict=160, timeout=30, retries=2)
     if not en:
         return f"Edit the image based on: {vi_text}"
-    en = en.split("\n")[0].replace('"', "").replace("`", "").strip()
+    # Gộp nhiều dòng thành 1 (model đôi khi tách outfit 2 nhân vật bằng xuống dòng thay vì ';'
+    # → lấy mỗi dòng đầu sẽ MẤT trang phục nhân vật thứ 2).
+    lines = [ln.strip() for ln in en.splitlines() if ln.strip()]
+    en = "; ".join(lines) if lines else en
+    en = en.replace('"', "").replace("`", "").strip()
     print(f"🧠 Kontext VI: {vi_text}")
     print(f"🧠 Kontext EN: {en}")
     return en if len(en) > 5 else f"Edit the image based on: {vi_text}"
@@ -1601,7 +1586,10 @@ Check and correct ALL of these:
                          temperature=0.1, num_predict=180, timeout=35, retries=1)
     if not fixed:
         return en_candidate   # soi lỗi → giữ bản dịch gốc
-    fixed = fixed.split("\n")[0].replace('"', "").replace("`", "").strip()
+    # Gộp nhiều dòng (giữ outfit nhiều nhân vật, xem translate_for_kontext).
+    lines = [ln.strip() for ln in fixed.splitlines() if ln.strip()]
+    fixed = "; ".join(lines) if lines else fixed
+    fixed = fixed.replace('"', "").replace("`", "").strip()
     for pre in ("corrected:", "instruction:", "output:", "english:"):
         if fixed.lower().startswith(pre):
             fixed = fixed[len(pre):].strip()
@@ -1612,7 +1600,6 @@ Check and correct ALL of these:
     else:
         print("🔁 Soi lại Kontext → lệnh đã ổn")
     return fixed
-
 
 
 def _pil_to_base64_png(img: Image.Image) -> str:
@@ -1925,30 +1912,6 @@ def _extract_side_hints(scene_desc_en: str) -> dict:
     return out
 
 
-def _build_multi_character_guard(scene_desc_en: str, scope: str = "all") -> str:
-    scope = _normalize_scope(scope)
-    n = _estimate_visible_character_count(scene_desc_en)
-    if scope != "all" or n < 2:
-        return ""
-    sides = _extract_side_hints(scene_desc_en)
-    parts = [
-        f"There appear to be {n} visible characters in the image.",
-        "This is a multi-character clothing edit.",
-        "Apply the new target outfit to every visible character, not just the most prominent one.",
-        "The left character must receive the clothing change.",
-        "The right character must also receive the clothing change.",
-        "Do not leave any visible character wearing their original clothes.",
-    ]
-    if sides.get("left"):
-        parts.append(f"Left-side context: {sides['left']}.")
-    if sides.get("right"):
-        parts.append(f"Right-side context: {sides['right']}.")
-    parts.append("Both left and right characters should clearly show the new outfit after editing.")
-    return " ".join(parts)
-
-
-
-
 def _user_explicitly_requested_cleanup(text: str = "") -> bool:
     """V8.5: chỉ cleanup phụ kiện/prop khi user nói rõ muốn xóa/bỏ/remove."""
     t = (text or "").lower()
@@ -1958,21 +1921,6 @@ def _user_explicitly_requested_cleanup(text: str = "") -> bool:
         "remove cat", "remove ears", "remove plush", "remove prop", "remove accessory"
     ]
     return any(k in t for k in keys)
-
-
-def _build_character_count_lock_instruction(expected_count: int = 0) -> str:
-    if expected_count and expected_count >= 2:
-        return (
-            f"Keep exactly {expected_count} visible characters as in the input image. "
-            "Do not remove, hide, crop out, merge, replace, or turn any visible character into a prop/background element. "
-            "The outfit reference is for clothing style only, not for the number of people, pose, composition, or scene layout. "
-            "Only modify clothing regions; preserve both visible characters, their faces, bodies, hands, pose, and overall composition."
-        )
-    return (
-        "Keep exactly the same number of visible characters as in the input image. "
-        "Do not remove, hide, crop out, merge, or replace any visible character. "
-        "Use the outfit reference for clothing style only."
-    )
 
 
 def verify_character_count_lock(result_image, expected_count: int, user_request_vi: str = "") -> dict:
@@ -2338,7 +2286,7 @@ Return JSON only with keys:
         "options": {"temperature": 0.0, "num_predict": 220},
     }
     try:
-        with httpx.Client(timeout=150) as c:
+        with httpx.Client(timeout=VERIFY_TIMEOUT_SEC) as c:
             r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
             r.raise_for_status()
             raw = (r.json().get("response") or "").strip()
@@ -2346,7 +2294,11 @@ Return JSON only with keys:
         m = re.search(r"\{.*\}", raw_clean, flags=re.S)
         data = json.loads(m.group(0) if m else raw_clean)
         data["success"] = bool(data.get("success"))
-        data["score"] = float(data.get("score", 0))
+        # Chịu được score=null / rỗng / chuỗi lạ — không để 1 field hỏng làm fail cả verify.
+        try:
+            data["score"] = float(data.get("score") or 0)
+        except (TypeError, ValueError):
+            data["score"] = 0.0
         data["reason"] = str(data.get("reason", ""))
         data["retry_instruction"] = str(data.get("retry_instruction", ""))
         print(f"🧪 Verify ({model}): {data}")
@@ -2475,7 +2427,16 @@ def run_flux_teacher_v7(input_image, user_request_vi: str, instruction_en: str, 
     scope_n = _normalize_scope(scope)
     multi_char = _estimate_visible_character_count(scene_desc_en) >= 2 and scope_n == "all"
 
-    if auto_verify and (verify_failed or (multi_char and verify_timeout)):
+    # Phân biệt "verifier KHÔNG chạy được" (timeout/lỗi hạ tầng) với "verifier CHẤM không đạt":
+    # - Chấm không đạt (verifier chạy được, phán ảnh xấu)      → rollback (đúng).
+    # - Chỉ timeout/lỗi verifier ở cảnh 1 nhân vật             → GIỮ ảnh (đã tốn nhiều phút GPU),
+    #   chỉ cảnh báo "chưa verify"; timeout KHÔNG phải bằng chứng ảnh xấu, và count-lock phía
+    #   trên đã chặn trường hợp mất nhân vật rồi.
+    # - Cảnh NHIỀU nhân vật vẫn thận trọng: timeout/lỗi cũng rollback (rủi ro mất nhân vật cao).
+    verify_judged_fail = verify_failed and not verify_timeout
+    should_reject = verify_judged_fail or (multi_char and verify_failed)
+
+    if auto_verify and should_reject:
         if YUMEAI_TEACHER_RETRY_MAX <= 0:
             reject_info = (
                 "🚫 V8.12 SAFE-COMMIT REJECT — verify chưa đạt, không retry tự động vì đang bật Low-VRAM mode\n"
@@ -2551,10 +2512,15 @@ def run_flux_teacher_v7(input_image, user_request_vi: str, instruction_en: str, 
         )
         return img2, info2
 
+    committed_unverified = auto_verify and verify_timeout
     info = (
-        "🧠 V8.10 Teacher Pipeline — COMMIT OK\n"
-        f"📝 {instruction_en}\n"
-        f"🧪 verify: {verify}\n" + "\n".join(info.split("\n")[1:])
+        "🧠 V8.10 Teacher Pipeline — COMMIT OK"
+        + (" ⚠️ (CHƯA VERIFY)" if committed_unverified else "") + "\n"
+        + ("⚠️ Verifier không chạy được (timeout/lỗi) → GIỮ ảnh nhưng CHƯA kiểm tra tự động. "
+           "Nếu thấy sai thì chỉnh lại. Muốn nới thời gian chờ verify: "
+           "$env:YUMEAI_VERIFY_TIMEOUT_SEC=\"300\".\n" if committed_unverified else "")
+        + f"📝 {instruction_en}\n"
+        + f"🧪 verify: {verify}\n" + "\n".join(info.split("\n")[1:])
     )
     return img, info
 
@@ -2828,30 +2794,10 @@ def region_edit_fn(input_image, target_vi, new_outfit_vi, style, resolution, pro
     }
     if progress: progress(0.3, desc=f"Đổi đồ vùng '{target_en}'...")
     pid = submit_workflow(wf)
-    result = poll_and_download(pid, progress=progress, start_pct=0.3, timeout=300)
+    result = poll_and_download(pid, progress=progress, start_pct=0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = (f"🎯 Đổi đồ vùng: '{target_vi}' → '{new_outfit_vi}'\n"
             f"📐 {nw}x{nh} | mask: {target_en} | 🎲 seed:{seed}")
     return result, info
-
-
-def region_edit_handler(ref_image, target_vi, new_outfit_vi, style, resolution, history):
-    """Nút 'Đổi đồ vùng này': chạy region_edit_fn rồi đổ kết quả vào ô ảnh + ảnh tham chiếu (để đổi tiếp người 2)."""
-    history = history or []
-    user_msg = {"role": "user", "content": f"🎯 [vùng] đổi '{target_vi}' → '{new_outfit_vi}'"}
-    if ref_image is None:
-        yield history + [{"role": "assistant", "content": "⚠️ Chưa có ảnh tham chiếu để đổi."}], None, None
-        return
-    if not (target_vi or "").strip() or not (new_outfit_vi or "").strip():
-        yield history + [user_msg, {"role": "assistant", "content": "⚠️ Cần nhập cả 'vùng cần đổi' và 'đồ mới'."}], None, ref_image
-        return
-    yield history + [user_msg, {"role": "assistant", "content": "🎯 Đang khoanh vùng & đổi đồ (mask inpaint, ~1–2 phút)..."}], None, ref_image
-    try:
-        img, info = region_edit_fn(ref_image, target_vi, new_outfit_vi, style, resolution, _dummy_progress)
-        new_hist = history + [user_msg, {"role": "assistant",
-                   "content": f"✅ Xong! Kết quả đã thành ảnh tham chiếu mới — đổi tiếp người khác được ngay.\n{info}"}]
-        yield new_hist, img, img   # gen_image = img ; ref_input = img (để chain sang người 2)
-    except Exception as e:
-        yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi đổi vùng: {e}"}], None, ref_image
 
 
 # ── Method D: 'mặc theo ảnh' — đưa ảnh trang phục tham chiếu (2 ReferenceLatent nối chuỗi) ──
@@ -2943,184 +2889,6 @@ def garment_transfer_fn(person_image, garment_image, note_vi, progress=None,
             f"🎚️ guidance:{guidance} | steps:{steps} | 🎲 seed:{seed}")
     return img, info
 
-
-def garment_transfer_handler(person_image, garment_image, note_vi,
-                             flux_guidance, flux_steps, flux_turbo, flux_lora_str, history):
-    """Nút '👕 Mặc theo ảnh này' — Method D: transfer trang phục từ ảnh tham chiếu lên nhân vật."""
-    history = history or []
-    user_msg = {"role": "user", "content": "👕 [mặc theo ảnh trang phục tham chiếu]"}
-    if person_image is None:
-        yield history + [{"role": "assistant", "content": "⚠️ Chưa có ảnh nhân vật (ô 'Ảnh tham chiếu')."}], None, None
-        return
-    if garment_image is None:
-        yield history + [user_msg, {"role": "assistant", "content": "⚠️ Chưa có ảnh trang phục tham chiếu để mặc."}], None, person_image
-        return
-    yield history + [user_msg, {"role": "assistant", "content": "👕 Đang mặc theo ảnh (Flux Kontext)... kiên nhẫn vài phút nhé."}], None, person_image
-    try:
-        img, info = garment_transfer_fn(person_image, garment_image, note_vi, _dummy_progress,
-                                        guidance=flux_guidance, steps=flux_steps,
-                                        use_turbo=flux_turbo, lora_strength=flux_lora_str)
-        new_hist = history + [user_msg, {"role": "assistant",
-                   "content": f"✅ Xong! Kết quả đã thành ảnh tham chiếu mới.\n{info}"}]
-        yield new_hist, img, img   # gen_image = img ; ref_input = img (chain)
-    except Exception as e:
-        yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi mặc theo ảnh: {e}"}], None, person_image
-
-
-def unified_chat(message, history,
-                 ref_image, style, resolution,
-                 use_ip, use_reactor, use_esrgan,
-                 cn_str, face_str, use_flux,
-                 flux_guidance, flux_steps,
-                 flux_turbo, flux_lora_str,
-                 kontext_prompt, kontext_review=True, enrich=True):
-    """
-    History format Gradio 6.0: [{"role": "user/assistant", "content": "..."}, ...]
-    """
-    text = (message or "").strip()
-    has_ref = ref_image is not None
-    if not text and not has_ref:
-        yield history, None
-        return
-
-    create_kw = ["tạo ảnh", "vẽ cho", "vẽ ", "tạo ra", "hãy vẽ", "tạo hình",
-                 "generate", "draw", "tạo một ảnh", "tạo cho tôi"]
-    is_create = any(kw in text.lower() for kw in create_kw) and not has_ref
-
-    user_display = (f"📎 [ảnh tham chiếu]\n{text}" if text else "📎 [ảnh tham chiếu]") if has_ref else text
-    user_msg = {"role": "user", "content": user_display}
-
-    # ── Tạo ảnh từ text ──
-    if is_create:
-        yield history + [user_msg, {"role": "assistant", "content": "⏳ Đang tạo ảnh..."}], None
-        try:
-            model = get_checkpoint_model(style=style)
-            if not model: raise Exception("Không tìm thấy checkpoint!")
-            en_tags = enrich_for_create(text, style) if enrich else translate_vi_en(text)
-            style_tags = {
-                "Anime":     "anime style, 2d illustration, vibrant colors",
-                "Realistic": "photorealistic, 8k, detailed, soft lighting, cinematic",
-                "Semi":      "semi-realistic, digital art, painterly",
-            }.get(style, "anime style")
-            full_prompt = f"{en_tags}, {style_tags}, masterpiece, best quality"
-            neg_prompt  = "worst quality, low quality, blurry, deformed, ugly, watermark"
-            seed = random.randint(1, 2**31)
-            res  = int(resolution)
-            wf   = build_quality_workflow(model, full_prompt, neg_prompt,
-                                          seed,
-                                          "Cân bằng (28 steps)",
-                                          "2x (ESRGAN)" if use_esrgan else "Không upscale",
-                                          res, res)
-            pid = submit_workflow(wf)
-            img = poll_and_download(pid, timeout=300)
-            new_hist = history + [user_msg, {"role": "assistant", "content": "✅ Ảnh đã tạo xong! Xem bên dưới ↓"}]
-            yield new_hist, img
-        except Exception as e:
-            yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi tạo ảnh: {e}"}], None
-
-    # ── ControlNet hoặc Inpaint hoặc Flux Kontext (đều cần ảnh) ──
-    elif has_ref:
-        # ── FLUX KONTEXT: nếu bật → dùng cho MỌI lệnh edit (hiểu lệnh thật) ──
-        if use_flux:
-            if not get_flux_models():
-                msg = ("⚠️ Flux Kontext chưa đủ model. Cần trong ComfyUI:\n"
-                       "• `models/unet/flux1-kontext-dev-Q3_K_S.gguf`\n"
-                       "• `models/text_encoders/clip_l.safetensors` + `t5xxl_fp8_e4m3fn_scaled.safetensors`\n"
-                       "• `models/vae/ae.safetensors`\n"
-                       "• Node `ComfyUI-GGUF` (city96)\n\n"
-                       "Restart ComfyUI sau khi cài đủ.")
-                yield history + [user_msg, {"role": "assistant", "content": msg}], None
-                return
-
-            yield history + [user_msg, {"role": "assistant",
-                  "content": "🧠 Đang edit bằng Flux Kontext...\n⏳ Rất chậm trên 4GB (offload RAM), kiên nhẫn 5-15 phút nhé!"}], None
-            try:
-                img, info = flux_kontext_fn(
-                    ref_image, text or "improve the image quality", _dummy_progress,
-                    guidance=flux_guidance, steps=flux_steps,
-                    use_turbo=flux_turbo, lora_strength=flux_lora_str,
-                    instruction_override=kontext_prompt, review=kontext_review
-                )
-                new_hist = history + [user_msg, {"role": "assistant", "content": f"✅ Xong! Xem ảnh bên dưới ↓\n{info}"}]
-                yield new_hist, img
-            except Exception as e:
-                yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi Flux Kontext: {e}"}], None
-            return
-
-        # Kiểm tra có phải lệnh xóa/thay vật thể không
-        action, target, replacement = parse_inpaint_command(text)
-
-        if action in ("remove", "replace"):
-            # Đây CHẮC CHẮN là lệnh inpaint — không rơi sang ControlNet
-            if not get_segment_available():
-                msg = ("⚠️ Tính năng xóa/thay vật thể cần cài thêm node.\n\n"
-                       "Mở terminal chạy:\n"
-                       "```\n"
-                       'cd "D:\\baitap\\code py\\formyhorny\\ComfyUI\\custom_nodes"\n'
-                       "git clone https://github.com/storyicon/comfyui_segment_anything\n"
-                       "cd comfyui_segment_anything\n"
-                       "pip install -r requirements.txt\n"
-                       "```\n"
-                       "Rồi restart ComfyUI. Model sẽ tự tải lần đầu.")
-                yield history + [user_msg, {"role": "assistant", "content": msg}], None
-                return
-
-            # ── INPAINT: xóa / thay vật thể ──
-            act_label = "🗑️ Đang xóa vật thể..." if action == "remove" else "🔄 Đang thay vật thể..."
-            yield history + [user_msg, {"role": "assistant", "content": act_label}], None
-            try:
-                img, info = inpaint_fn(ref_image, action, target, replacement,
-                                       style, resolution, _dummy_progress)
-                new_hist = history + [user_msg, {"role": "assistant", "content": f"{info}\nXem ảnh bên dưới ↓"}]
-                yield new_hist, img
-            except Exception as e:
-                yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi inpaint: {e}"}], None
-
-        else:
-            # ── CONTROLNET: giữ khuôn mặt (chỉ khi KHÔNG phải lệnh inpaint) ──
-            yield history + [user_msg, {"role": "assistant", "content": "⏳ Đang xử lý khuôn mặt..."}], None
-            try:
-                img, info = controlnet_fn(
-                    ref_image, text or "masterpiece, best quality, highly detailed",
-                    "Canny (giữ cấu trúc)", cn_str, face_str,
-                    use_ip, use_reactor, use_esrgan, style, resolution,
-                    _dummy_progress
-                )
-                new_hist = history + [user_msg, {"role": "assistant", "content": f"✅ Xong! Xem ảnh bên dưới ↓\n{info}"}]
-                yield new_hist, img
-            except Exception as e:
-                yield history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi: {e}"}], None
-
-    # ── Chat Yuki bình thường ──
-    else:
-        current = history + [user_msg, {"role": "assistant", "content": ""}]
-        yield current, None
-        system = PERSONA["system"]
-        ollama_msgs = []
-        for m in history:
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role in ("user", "assistant") and isinstance(content, str) \
-               and not content.startswith(("⏳","✅","❌","📎")):
-                ollama_msgs.append({"role": role, "content": content})
-        ollama_msgs.append({"role": "user", "content": text})
-        try:
-            with httpx.Client(timeout=30) as c:
-                with c.stream("POST", f"{OLLAMA_URL}/api/chat", json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [{"role": "system", "content": system}] + ollama_msgs,
-                    "stream": True
-                }) as resp:
-                    full = ""
-                    for line in resp.iter_lines():
-                        if line:
-                            data = json.loads(line)
-                            full += data.get("message", {}).get("content", "")
-                            current[-1] = {"role": "assistant", "content": full}
-                            yield current, None
-        except Exception as e:
-            current[-1] = {"role": "assistant", "content": f"(Lỗi Ollama: {e})"}
-            yield current, None
 
 def _smart_prompt_wants_outfit_reference(text: str) -> bool:
     """
@@ -3493,8 +3261,6 @@ def smart_unified_chat(
     except Exception as e:
         err_hist = history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi smart_execute: {e}"}]
         yield _pack_main_outputs(err_hist, img=None, keep_ref=working_image, keep_current=current_image or working_image, next_tool_once=tool_once)
-
-
 
 
 # ══════════════════════════════════

@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx, json, uuid, asyncio, base64, random
 
-from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL
+from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, COMFY_TIMEOUT_SEC
 from yumeai.core.personas import PERSONAS
 from yumeai.core.runtime import (
     guarded_submit_workflow,
@@ -23,6 +23,7 @@ from yumeai.core.runtime import (
 )
 from yumeai.services.ollama_service import translate_vi_en
 from yumeai.services.comfy_service import (
+    ComfyUIError,
     get_checkpoint_model,
     build_quality_workflow,
 )
@@ -161,9 +162,12 @@ async def gen_image(req: ImgReq):
     # hãy tự đảm bảo không bấm tạo ảnh ở cả hai nơi cùng lúc.
     try:
         prompt_id = await asyncio.to_thread(guarded_submit_workflow, workflow)
-        img = await asyncio.to_thread(guarded_poll_and_download, prompt_id, None, 0.0, 120)
+        img = await asyncio.to_thread(guarded_poll_and_download, prompt_id, None, 0.0, COMFY_TIMEOUT_SEC)
     except ResourceBusyError as e:
         raise HTTPException(429, str(e))
+    except ComfyUIError as e:
+        # Lỗi từ ComfyUI (từ chối job / job lỗi / timeout) — trả 502 thay vì 500 khó hiểu.
+        raise HTTPException(502, str(e))
 
     # Bước 6: Encode base64 để trả về JSON
     import io

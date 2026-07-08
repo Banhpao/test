@@ -10,10 +10,19 @@ import time
 import uuid
 
 import httpx
-import gradio as gr
 from PIL import Image
 
 from yumeai.core.config import COMFY_URL
+
+
+class ComfyUIError(Exception):
+    """Lỗi khi giao tiếp với ComfyUI (upload/submit/poll/timeout).
+
+    Framework-agnostic — KHÔNG dùng gr.Error ở đây để main.py (FastAPI) dùng chung
+    comfy_service mà không phải cài gradio. Bên gọi tự đổi sang kiểu lỗi phù hợp:
+    app_gradio.py bọc lại thành gr.Error, main.py bắt và đổi thành HTTPException.
+    """
+    pass
 
 def _fetch_model_list(node_class: str, input_field: str) -> list:
     """
@@ -185,7 +194,7 @@ def upload_image_to_comfy(pil_image: Image.Image) -> str:
         files = {"image": (fname, buf, "image/png")}
         r = c.post(f"{COMFY_URL}/upload/image", files=files, data={"overwrite": "true"})
         if r.status_code != 200:
-            raise gr.Error(f"Upload ảnh lỗi: {r.text}")
+            raise ComfyUIError(f"Upload ảnh lỗi: {r.text}")
         uploaded = r.json().get("name", fname)
         print(f"📤 Uploaded: {uploaded}")
         return uploaded
@@ -197,7 +206,7 @@ def submit_workflow(workflow: dict) -> str:
         r = c.post(f"{COMFY_URL}/prompt",
                    json={"prompt": workflow, "client_id": client_id})
         if r.status_code != 200:
-            raise gr.Error(f"ComfyUI từ chối: {r.text}")
+            raise ComfyUIError(f"ComfyUI từ chối: {r.text}")
         pid = r.json()["prompt_id"]
         print(f"📤 Job: {pid}")
         return pid
@@ -221,7 +230,7 @@ def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300)
                 job = hist[prompt_id]
                 if job.get("status", {}).get("status_str") == "error":
                     msgs = job.get("status", {}).get("messages", [])
-                    raise gr.Error(f"ComfyUI lỗi: {msgs}")
+                    raise ComfyUIError(f"ComfyUI lỗi: {msgs}")
                 for node_out in job.get("outputs", {}).values():
                     imgs = node_out.get("images", [])
                     if imgs:
@@ -230,13 +239,13 @@ def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300)
                         break
                 if img_info:
                     break
-            except gr.Error:
+            except ComfyUIError:
                 raise
             except Exception as e:
                 print(f"⚠️ Poll: {e}")
 
     if not img_info:
-        raise gr.Error("Timeout — ComfyUI chạy quá lâu")
+        raise ComfyUIError("Timeout — ComfyUI chạy quá lâu")
 
     if progress:
         progress(0.95, desc="📥 Đang tải ảnh...")
