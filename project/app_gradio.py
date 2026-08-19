@@ -7,7 +7,7 @@ Chạy: python app_gradio.py
 """
 
 import gradio as gr
-from yumeai.core.prompt_router import plan_request
+from yumeai.core.prompt_router import plan_request, contains_any_word
 print(">>> YumeAI app_full — BAN GOP DAY DU + PROMPT THONG MINH <<<  (da gop 2 ban)")
 
 # ── Fix A: Bypass brotli middleware (nén nhưng không sửa Content-Length)
@@ -44,12 +44,15 @@ def _fx():
         lg.addFilter(f)
 threading.Thread(target=lambda: (_fx(), __import__('time').sleep(2), _fx()), daemon=True).start()
 
-import httpx, json, uuid, time, io, random, re, inspect, base64
+import httpx, json, io, random, re, inspect, base64
 
 # V8.10: ComfyUI long timeout config — nguồn DUY NHẤT ở yumeai/core/config.py
 # (COMFY_TIMEOUT_SEC), app_gradio.py và main.py dùng chung để không lệch pha.
 # Chỉnh qua PowerShell: $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"
-from yumeai.core.config import COMFY_TIMEOUT_SEC as COMFY_LONG_TIMEOUT_SEC, VERIFY_TIMEOUT_SEC
+from yumeai.core.config import (
+    COMFY_TIMEOUT_SEC as COMFY_LONG_TIMEOUT_SEC,
+    VERIFY_TIMEOUT_SEC, AUTO_MASK_EDIT, AUTO_MASK_UPSCALE, AUTO_MASK_CONTROLNET, AUTO_MASK_HIRES,
+)
 
 # V8.12: Resource Guard / Low-VRAM safety config — ĐÃ CHUYỂN sang yumeai/core/runtime.py
 # để app_gradio.py và main.py dùng chung 1 bản duy nhất, không lệch pha khi sửa.
@@ -63,30 +66,34 @@ from yumeai.core.runtime import (
     YUMEAI_GARMENT_PRESERVE_DENOISE,
     YUMEAI_TEACHER_RETRY_MAX,
     _resource_safe_steps,
-    guarded_submit_workflow,
-    guarded_poll_and_download,
+    run_comfy_job as _raw_run_comfy_job,
     ResourceBusyError,
 )
-from PIL import Image, ImageFilter
-import numpy as np
+from PIL import Image
 
 # ══════════════════════════════════
 # CẤU HÌNH + SERVICES (đã tách module)
 # ══════════════════════════════════
-from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, COMFY_MODELS_DIR
-from yumeai.core.personas import PERSONA
+from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, CHAT_TIMEOUT_SEC
+from yumeai.core.personas import PERSONA, PERSONAS
+# Prompt text2img dùng CHUNG với main.py — xem yumeai/core/image_prompt.py
+from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
+# Lịch sử chat + options Ollama dùng CHUNG với main.py — xem yumeai/core/chat_context.py
+from yumeai.core.chat_context import build_persona_messages, chat_options
 from yumeai.services.ollama_service import (
-    TRANSLATE_MODEL,
+    get_translate_model,
     translate_vi_en,
+    translate_vi_en_ex,
     _ollama_chat,
     warmup_ollama,
-    enrich_for_create,
+    check_chat_model,
+    enrich_for_create_ex,
 )
 from yumeai.services.comfy_service import (
     ComfyUIError,
     _fetch_model_list,
     _is_sdxl,
-    get_checkpoint_model,
+    get_checkpoint_model as _raw_get_checkpoint_model,
     get_controlnet_models,
     get_ipadapter_models,
     get_clipvision_models,
@@ -96,28 +103,59 @@ from yumeai.services.comfy_service import (
     get_reactor_available,
     get_upscale_models,
     build_quality_workflow,
+    QUALITY_BALANCED, UPSCALE_NONE,
 )
 
 
 # ══════════════════════════════════
-# Resource Guard: bọc lại guarded_submit_workflow/guarded_poll_and_download
+# Resource Guard: bọc lại run_comfy_job của runtime.py
 # bằng gr.Error (đặc thù Gradio) — bản gốc trong runtime.py không phụ thuộc
 # gradio để main.py (FastAPI) dùng chung được mà không cần cài gradio.
 # ══════════════════════════════════
-def submit_workflow(workflow, *args, **kwargs):
+def run_comfy_job(workflow, progress=None, start_pct=0.3, timeout=None, *, label="ComfyUI workflow"):
+    """Gửi workflow + chờ ảnh trong MỘT khối có khóa, đổi lỗi sang gr.Error.
+
+    Thay cho cặp submit_workflow()/poll_and_download() cũ: khóa Resource Guard
+    trước đây được LẤY ở hàm này và NHẢ ở hàm kia, nên bất kỳ exception nào chen
+    vào giữa cũng làm kẹt slot cho tới khi restart app.
+    """
+    if timeout is None:
+        timeout = COMFY_LONG_TIMEOUT_SEC
     try:
-        return guarded_submit_workflow(workflow, *args, **kwargs)
+        return _raw_run_comfy_job(workflow, progress, start_pct, timeout, label=label)
     except ResourceBusyError as e:
         raise gr.Error(str(e))
     except ComfyUIError as e:
         raise gr.Error(str(e))
 
 
-def poll_and_download(*args, **kwargs):
+def get_checkpoint_model(style="Anime", prefer_realistic=None):
+    """Bọc bản gốc: ComfyUIError (chưa bật ComfyUI / chưa có checkpoint) → gr.Error.
+
+    Trước đây hàm gốc trả "" và mọi nơi đều báo "Không tìm thấy model!" — thông báo
+    đó khiến người dùng đi tìm file model trong khi thủ phạm thật là ComfyUI chưa chạy.
+    """
     try:
-        return guarded_poll_and_download(*args, **kwargs)
+        return _raw_get_checkpoint_model(style=style, prefer_realistic=prefer_realistic)
     except ComfyUIError as e:
         raise gr.Error(str(e))
+
+
+TRANSLATE_FAILED_WARNING = (
+    "⚠️ KHÔNG dịch được sang tiếng Anh (Ollama không phản hồi).\n"
+    "   Prompt tiếng Việt đã được đưa THẲNG vào Stable Diffusion — model không hiểu\n"
+    "   tiếng Việt nên ảnh sẽ sai hoặc rác. Bật Ollama (`ollama serve`) rồi thử lại."
+)
+
+
+def translate_or_warn(prompt: str) -> tuple[str, str]:
+    """Dịch VI→EN, trả về (en_text, warning).
+
+    warning="" nếu dịch OK. Bản cũ nuốt lỗi im lặng: trả nguyên tiếng Việt rồi
+    vẽ ra ảnh rác mà không nói gì, người dùng đi tìm nguyên nhân ở chỗ khác.
+    """
+    en, ok = translate_vi_en_ex(prompt)
+    return en, ("" if ok else "\n" + TRANSLATE_FAILED_WARNING)
 
 
 def upload_image_to_comfy(img):
@@ -132,34 +170,43 @@ def upload_image_to_comfy(img):
 # ══════════════════════════════════
 # TEXT2IMG
 # ══════════════════════════════════
-def generate_image_fn(prompt, style, quality, upscale, progress=gr.Progress()):
+def generate_image_fn(prompt, style, quality, upscale, progress=gr.Progress(),
+                     *, enrich=False, appearance=""):
+    """Tạo ảnh mới từ mô tả.
+
+    enrich=True  → LLM mở rộng mô tả ngắn thành prompt chi tiết (checkbox
+                   "🧠 Prompt thông minh khi TẠO ảnh"). Trước đây checkbox này
+                   KHÔNG được nối vào đâu cả nên bật hay tắt đều như nhau.
+    appearance   → mô tả ngoại hình nhân vật đang chọn, ghép lên đầu prompt để
+                   ảnh ra đúng nhân vật thay vì một người ngẫu nhiên.
+    """
     if not prompt.strip():
         raise gr.Error("Hãy nhập mô tả!")
 
-    progress(0.1, desc="🔤 Đang dịch...")
-    en_tags = translate_vi_en(prompt)
-
-    style_tags = {
-        "Anime":    "anime style, 2d illustration, vibrant colors, clean lineart",
-        "Realistic":"photorealistic, 8k, detailed skin texture, soft lighting, cinematic",
-        "Semi":     "semi-realistic, digital art, painterly, detailed",
-    }.get(style, "anime style")
+    if enrich:
+        progress(0.1, desc="🧠 Đang mở rộng mô tả (LLM)...")
+        en_tags, ok = enrich_for_create_ex(prompt, style)
+    else:
+        progress(0.1, desc="🔤 Đang dịch...")
+        en_tags, ok = translate_vi_en_ex(prompt)
+    tr_warn = "" if ok else "\n" + TRANSLATE_FAILED_WARNING
 
     progress(0.2, desc="📦 Chuẩn bị model...")
     model = get_checkpoint_model(style=style)
-    if not model: raise gr.Error("Không tìm thấy model!")
-    print(f"🎨 text2img: {model} | quality={quality} | upscale={upscale}")
+    if not model:
+        raise gr.Error("ComfyUI không trả về checkpoint nào dùng được.")
+    print(f"🎨 text2img: {model} | quality={quality} | upscale={upscale} | enrich={bool(enrich)}")
 
-    full_prompt = f"{en_tags}, {style_tags}, masterpiece, best quality, highly detailed, sharp focus"
-    neg_prompt  = "worst quality, low quality, blurry, deformed, ugly, watermark, text, bad anatomy, extra fingers, jpeg artifacts"
+    full_prompt = build_positive_prompt(en_tags, style, appearance)
     seed = random.randint(1, 2**31)
 
-    workflow = build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscale)
+    workflow = build_quality_workflow(model, full_prompt, NEGATIVE_PROMPT, seed, quality, upscale)
 
     progress(0.3, desc="📤 Gửi lệnh...")
-    pid = submit_workflow(workflow)
-    img = poll_and_download(pid, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
-    info = f"✨ {prompt}\n🔤 {en_tags}\n🎨 {style} | ⚙️ {quality} | 🔍 {upscale}\n🎲 seed: {seed}"
+    img = run_comfy_job(workflow, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
+    info = (f"✨ {prompt}\n🔤 {en_tags}\n"
+            f"🎨 {style} | ⚙️ {quality} | 🔍 {upscale} | 🧠 enrich:{'bật' if enrich else 'tắt'}\n"
+            f"🎲 seed: {seed}{tr_warn}")
     return img, info
 
 
@@ -215,7 +262,7 @@ def controlnet_fn(input_image, prompt, cn_mode, cn_strength, face_strength,
         raise gr.Error("Chưa cài ReActor! Chạy lệnh git clone trong tab Hướng dẫn.")
 
     progress(0.05, desc="🔤 Dịch prompt...")
-    en_tags = translate_vi_en(prompt)
+    en_tags, tr_warn = translate_or_warn(prompt)
     print(f"🔤 EN: {en_tags}")
 
     style_tags = {
@@ -394,12 +441,11 @@ def controlnet_fn(input_image, prompt, cn_mode, cn_strength, face_strength,
     mode_desc = " + ".join(modes)
 
     progress(0.3, desc=f"📤 Gửi lệnh ({mode_desc})...")
-    pid = submit_workflow(workflow)
-    result = poll_and_download(pid, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
+    result = run_comfy_job(workflow, progress, 0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
 
     info = (f"✨ {prompt}\n🔤 {en_tags}\n⚙️ {mode_desc}\n"
             f"🎛️ CN:{cn_strength}"+(f" | Face:{face_strength}" if use_ipadapter else "")+
-            f"\n🎨 {style} | 📐 {nw}x{nh} | 🎲 seed:{seed}")
+            f"\n🎨 {style} | 📐 {nw}x{nh} | 🎲 seed:{seed}{tr_warn}")
     return result, info
 
 
@@ -482,8 +528,6 @@ def check_controlnet_status():
 # ══════════════════════════════════
 # INPAINTING — Xóa / thay thế vật thể bằng text
 # ══════════════════════════════════
-import tempfile
-
 def _dummy_progress(*a, **kw): pass
 
 
@@ -507,8 +551,8 @@ def _timeout_stop_info(stage: str, e, *, scope="", steps=None, timeout_sec=None)
 
 AUTO_PRESETS = {
     "text2img": {
-        "quality": "Cân bằng (28 steps)",
-        "upscale": "Không upscale",
+        "quality": QUALITY_BALANCED,
+        "upscale": UPSCALE_NONE,
     },
     "edit_clothes": {
         "flux_guidance": 3.5,
@@ -639,6 +683,8 @@ def build_smart_runners(
     flux_lora_strength=1.0,
     kontext_prompt="",
     kontext_review=True,
+    enrich=False,
+    persona_id="yuki",
 ):
     """
     Gom các runner vào một dict.
@@ -651,12 +697,17 @@ def build_smart_runners(
     runners = {}
 
     # 1) text2img
+    # Ngoại hình nhân vật đang chọn được ghép vào prompt để ảnh ra đúng người đó.
+    _appearance = (PERSONAS.get(persona_id) or PERSONA).get("appearance", "")
+
     runners["text2img"] = lambda prompt, style, progress: generate_image_fn(
         prompt=prompt,
         style=style,
         quality=AUTO_PRESETS["text2img"]["quality"],
         upscale=AUTO_PRESETS["text2img"]["upscale"],
         progress=progress,
+        enrich=enrich,
+        appearance=_appearance,
     )
 
     # 2) inpaint
@@ -1006,6 +1057,24 @@ def smart_execute(
 
     if tool_mode == "flux_edit" and input_image is not None and _looks_like_clothes_request(tool_once.get("note") or text):
         note = (tool_once.get("note") or text or "đổi trang phục theo yêu cầu").strip()
+        # ✨ ƯU TIÊN mask+inpaint (giữ form, chống chibi, nhanh) khi có segment-anything.
+        # Flux Q3 hay bịa nhân vật + biến người thành chibi + rất chậm (~400s). Mask khoá vùng
+        # quần áo → chỉ vẽ lại đúng vùng đó nên mặt/tóc/tỉ lệ/tư thế/nền giữ nguyên tuyệt đối.
+        # Có lỗi bất kỳ thì tự lùi về Flux Kontext (giữ hành vi cũ). Tắt: $env:YUMEAI_AUTO_MASK_EDIT="0".
+        if AUTO_MASK_EDIT and get_segment_available():
+            try:
+                img, info = auto_outfit_edit_fn(input_image, note, style=default_style,
+                                                resolution=resolution, progress=progress)
+                plan = {
+                    "task": "edit_clothes_mask",
+                    "style": default_style,
+                    "use_flux": False,
+                    "reason": "✨ AUTO mask+inpaint: dò quần áo → SAM mask → inpaint (giữ form, chống chibi, nhanh hơn Flux).",
+                    "mode_router": mode_meta,
+                }
+                return {"task": "edit_clothes_mask", "plan": plan, "assistant_text": None, "image": img, "info": info}
+            except Exception as e:
+                print(f"⚠️ AUTO mask edit lỗi ({e}) → lùi về Flux Kontext")
         img, info = runners["flux_edit"](input_image, note, default_style, resolution, progress)
         plan = {
             "task": "edit_clothes",
@@ -1390,8 +1459,7 @@ def inpaint_fn(input_image, action, target_vi, replacement_vi,
 
     act_desc = f"Thay '{target_vi}' bằng '{replacement_vi}'" if action == "replace" else f"Xóa '{target_vi}'"
     progress(0.35, desc=f"🎨 {act_desc}...")
-    pid = submit_workflow(workflow)
-    result = poll_and_download(pid, progress, 0.35, timeout=COMFY_LONG_TIMEOUT_SEC)
+    result = run_comfy_job(workflow, progress, 0.35, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = f"✅ {act_desc}\n🎯 Phát hiện: {target_en}\n⚙️ {method}\n📐 {nw}x{nh} | 🎲 seed:{seed}"
     return result, info
 
@@ -1551,7 +1619,7 @@ Examples:
 "đổi tóc thành màu đỏ" → Change the hair color to bright red while keeping the same face and outfit
 "xóa người phía sau" → Remove the person in the background while keeping everyone else and the scene unchanged"""
 
-    en = _ollama_chat(TRANSLATE_MODEL, system, vi_text,
+    en = _ollama_chat(get_translate_model(), system, vi_text,
                       temperature=0.2, num_predict=160, timeout=30, retries=2)
     if not en:
         return f"Edit the image based on: {vi_text}"
@@ -1582,7 +1650,7 @@ Check and correct ALL of these:
     user = (f"Vietnamese request: {vi_text}\n"
             f"Candidate English: {en_candidate}\n"
             "Return the corrected single-line instruction:")
-    fixed = _ollama_chat(TRANSLATE_MODEL, system, user,
+    fixed = _ollama_chat(get_translate_model(), system, user,
                          temperature=0.1, num_predict=180, timeout=35, retries=1)
     if not fixed:
         return en_candidate   # soi lỗi → giữ bản dịch gốc
@@ -1688,13 +1756,44 @@ def describe_outfit_image(outfit_image, note_vi="") -> tuple[str, str]:
         return "", model
 
 
+def _image_fingerprint(img) -> str:
+    """Vân tay ổn định của một ảnh, dùng làm khoá cache cho các lời gọi vision."""
+    import hashlib
+    try:
+        small = img.convert("RGB").resize((64, 64))
+        return hashlib.md5(small.tobytes()).hexdigest()
+    except Exception:
+        return ""
+
+
+# Cache mô tả ảnh. Một lượt đổi đồ 2 nhân vật gọi vision tới ~8 lần, trong đó
+# choose_best_edit_mode() và _flux_edit_runner() mô tả ĐÚNG CÙNG một ảnh với cùng
+# một prompt ngay sau nhau. Trên máy 4GB VRAM mỗi lần vision mất hàng chục giây.
+_SCENE_CACHE: dict = {}
+_SCENE_CACHE_MAX = 16
+
+
+def clear_scene_cache():
+    _SCENE_CACHE.clear()
+
+
 def describe_scene_image(scene_image, user_note="") -> tuple[str, str]:
-    """V8.7: mô tả ảnh hiện tại để biết có mấy NHÂN VẬT người/anime, trái/phải, tóc, outfit hiện tại."""
+    """V8.7: mô tả ảnh hiện tại để biết có mấy NHÂN VẬT người/anime, trái/phải, tóc, outfit hiện tại.
+
+    Có cache theo (vân tay ảnh, ghi chú) — ảnh giống hệt + ghi chú giống hệt thì
+    dùng lại kết quả cũ thay vì chạy lại vision model.
+    """
     if scene_image is None:
         return "", ""
     model = _get_ollama_vision_model()
     if not model:
         return "", ""
+
+    cache_key = (_image_fingerprint(scene_image), (user_note or "").strip(), model)
+    if cache_key[0] and cache_key in _SCENE_CACHE:
+        cached = _SCENE_CACHE[cache_key]
+        print(f"⚡ Scene caption (cache): {cached[0][:70]}...")
+        return cached
 
     img = scene_image.convert("RGB")
     max_side = 640
@@ -1730,18 +1829,26 @@ def describe_scene_image(scene_image, user_note="") -> tuple[str, str]:
             text = (r.json().get("response") or "").strip()
             text = text.replace("\n", " ").replace('"', "").strip()
             print(f"🧭 Scene caption ({model}): {text}")
+            if cache_key[0]:
+                if len(_SCENE_CACHE) >= _SCENE_CACHE_MAX:
+                    _SCENE_CACHE.pop(next(iter(_SCENE_CACHE)))
+                _SCENE_CACHE[cache_key] = (text, model)
             return text, model
     except Exception as e:
         print(f"⚠️ Scene caption lỗi: {e}")
         return "", model
 
 def _looks_like_clothes_request(text: str) -> bool:
-    t = (text or "").lower()
+    """Khớp theo RANH GIỚI TỪ, không dùng `in`.
+
+    Bản cũ dùng `"đồ" in text` nên "tôi đồng ý thay đổi kế hoạch" bị coi là lệnh
+    đổi trang phục và đẩy thẳng vào Flux Kontext (~400s cho một câu chat).
+    """
     keys = [
         "đồ", "trang phục", "quần áo", "váy", "áo", "mặc", "sportswear", "outfit", "clothes", "dress",
         "shirt", "jacket", "uniform", "gym", "athletic", "thể thao", "cosplay", "đồng phục", "hoodie"
     ]
-    return any(k in t for k in keys)
+    return contains_any_word(text or "", keys)
 
 
 def _is_tool_arm_message(text: str) -> bool:
@@ -2015,9 +2122,15 @@ def choose_best_edit_mode(user_prompt: str, input_image=None, outfit_image=None,
     wants_ref = _wants_reference_outfit(note)
     clothes_req = _looks_like_clothes_request(note)
 
+    # Vision chỉ chạy khi quyết định thật sự cần đếm nhân vật. Bản cũ gọi ngay ở
+    # đây, kể cả khi req=="region" (kết quả bị vứt đi) — mỗi lần là hàng chục giây.
     scene_hint = ""
     n_chars = 0
-    if has_input:
+
+    def _load_scene():
+        nonlocal scene_hint, n_chars
+        if not has_input:
+            return
         try:
             scene_hint, _ = describe_scene_image(input_image, note)
             n_chars = _estimate_visible_character_count(scene_hint)
@@ -2037,7 +2150,11 @@ def choose_best_edit_mode(user_prompt: str, input_image=None, outfit_image=None,
 
     if req == "region":
         meta["decision"] = "region"
+        meta["visible_characters"] = "skipped (region mode)"
         return "region", meta
+
+    _load_scene()
+    meta["visible_characters"] = n_chars
 
     if req == "garment":
         if has_outfit and not same_reference:
@@ -2646,9 +2763,8 @@ def flux_kontext_fn(input_image, instruction_vi, progress=None,
     _chain_loras_into(wf, turbo_lora, lora_strength)
 
     if progress: progress(0.15, desc="Đang chạy Flux Kontext (rất chậm trên 4GB)...")
-    pid = submit_workflow(wf)
     # Flux trên 4GB cực chậm → timeout dài (mặc định 30 phút, chỉnh bằng YUMEAI_COMFY_TIMEOUT_SEC)
-    img = poll_and_download(pid, progress=progress, start_pct=0.15, timeout=COMFY_LONG_TIMEOUT_SEC)
+    img = run_comfy_job(wf, progress=progress, start_pct=0.15, timeout=COMFY_LONG_TIMEOUT_SEC)
 
     info = (f"🧠 Flux Kontext (edit thông minh)\n📝 {instruction_en}\n"
             f"🎚️ guidance:{guidance} | steps:{steps} | denoise:{denoise} | 🎲 seed:{seed}")
@@ -2793,11 +2909,289 @@ def region_edit_fn(input_image, target_vi, new_outfit_vi, style, resolution, pro
         "70": {"class_type": "SaveImage", "inputs": {"images": ["60", 0], "filename_prefix": "yumeai_region"}},
     }
     if progress: progress(0.3, desc=f"Đổi đồ vùng '{target_en}'...")
-    pid = submit_workflow(wf)
-    result = poll_and_download(pid, progress=progress, start_pct=0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
+    result = run_comfy_job(wf, progress=progress, start_pct=0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = (f"🎯 Đổi đồ vùng: '{target_vi}' → '{new_outfit_vi}'\n"
             f"📐 {nw}x{nh} | mask: {target_en} | 🎲 seed:{seed}")
     return result, info
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ✨ AUTO OUTFIT EDIT — "1 prompt, tự động, giữ form" (nền tảng model-agnostic)
+# Ý tưởng: vì chỉ INPAINT trong vùng mask quần áo, nên mặt/tóc/tỉ lệ/tư thế/nền
+# nằm NGOÀI mask → không bị đụng → CHIBI bất khả thi (không vẽ lại thân).
+# Đây là cách ép "chỉ đổi quần áo" giống ChatGPT mà không cần model khổng lồ.
+# Sau này thay checkpoint inpaint SD1.5 bằng SDXL/Flux-inpaint lớn hơn là nâng cấp,
+# khung "vision dò đồ → SAM mask → inpaint" giữ nguyên.
+# ══════════════════════════════════════════════════════════════════════════
+def _detect_clothing_targets(scene_image, note_vi: str = "") -> str:
+    """Dùng vision (qwen2.5vl) LIỆT KÊ các món quần áo đang mặc → prompt dò cho GroundingDINO.
+    Trả về chuỗi kiểu 'red dress . black dress . skirt' (GroundingDINO tách concept bằng ' . ').
+    Hỏng/không có vision → fallback prompt quần áo tổng quát (vẫn dò được đa số ca)."""
+    fallback = "dress . skirt . shorts . shirt . top . outfit . clothes . jacket . uniform . costume"
+    if scene_image is None:
+        return fallback
+    model = _get_ollama_vision_model()
+    if not model:
+        return fallback
+
+    img = scene_image.convert("RGB")
+    max_side = 640
+    w, h = img.size
+    scale = min(max_side / max(w, h), 1.0)
+    if scale < 1.0:
+        img = img.resize((int(w * scale), int(h * scale)))
+
+    prompt = (
+        "You label an image for an object detector that will MASK the clothing so it can be replaced. "
+        "List ONLY the clothing / outfit garments the visible characters are CURRENTLY wearing, "
+        "as short English detection nouns, each separated by ' . '. "
+        "Keep distinguishing colors so each person's garment is found (e.g. 'red dress . black dress'). "
+        "Include each garment piece you see: dress, skirt, top, shirt, shorts, jacket, coat. "
+        "Do NOT list faces, hair, skin, bodies, pets, plush toys, or background. "
+        "Output ONLY the ' . '-separated garment list — no sentences, no explanation."
+    )
+    note = (note_vi or "").strip()
+    if note:
+        prompt += f" Editing context (what the user wants to change): {note}"
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "images": [_pil_to_base64_png(img)],
+        "stream": False,
+        "options": {"temperature": 0.0, "num_predict": 60},
+    }
+    try:
+        with httpx.Client(timeout=VERIFY_TIMEOUT_SEC) as c:
+            r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
+            r.raise_for_status()
+            text = (r.json().get("response") or "").strip()
+        text = " ".join(text.splitlines()).replace('"', "").replace("`", "").replace("*", "").strip()
+        parts = [p.strip(" .,;:-") for p in re.split(r"[.,;\n]", text) if p.strip(" .,;:-")]
+        parts = [p for p in parts if 2 <= len(p) <= 40][:8]
+        targets = " . ".join(parts)
+        print(f"👗 Clothing targets (vision): {targets}")
+        return targets if len(targets) >= 3 else fallback
+    except Exception as e:
+        print(f"⚠️ _detect_clothing_targets lỗi: {e} → fallback tổng quát")
+        return fallback
+
+
+def _enrich_outfit_prompt(request_vi: str, style: str = "Anime") -> str:
+    """#2: Biến yêu cầu đồ VI ngắn (vd 'đồ thể thao') thành mô tả trang phục EN CHI TIẾT cho inpaint.
+    Chỉ tả QUẦN ÁO (món đồ, màu, chất liệu, kiểu) — KHÔNG thêm người/mặt/tóc/dáng/nền.
+    Hỏng → lùi về translate_vi_en (tag thường)."""
+    system = (
+        "You expand a short Vietnamese clothing request into a rich English CLOTHING description "
+        "for image inpainting. Describe ONLY garments: the outfit pieces, their colors, materials, "
+        "patterns, fit, and small clothing accessories. Add tasteful detail so the clothes look good. "
+        "Do NOT mention people, faces, hair, body, pose, background, or scene. "
+        "Output ONLY comma-separated clothing phrases (about 8-16 words). No sentences, no explanation.\n"
+        "Examples:\n"
+        "'đồ thể thao' -> sporty athletic outfit, fitted track jacket, sports bra, running shorts, sleek activewear, breathable fabric, dynamic sportswear, detailed\n"
+        "'váy dạ hội đỏ' -> elegant red evening gown, flowing satin fabric, fitted bodice, long flowing skirt, tasteful sparkle, formal dress, detailed\n"
+        "'đồ bơi' -> stylish two-piece bikini swimsuit, smooth fabric, bright color, summer beachwear, detailed"
+    )
+    try:
+        en = _ollama_chat(get_translate_model(), system, request_vi,
+                          temperature=0.3, num_predict=90, timeout=30, retries=1)
+    except Exception:
+        en = ""
+    if not en:
+        return translate_vi_en(request_vi)
+    en = " ".join(en.splitlines()).replace('"', "").replace("`", "").replace("*", "").strip()
+    for pre in ("outfit:", "clothing:", "clothes:", "english:", "output:"):
+        if en.lower().startswith(pre):
+            en = en[len(pre):].strip()
+    print(f"👚 Outfit prompt (enriched): {en}")
+    return en if len(en) > 8 else translate_vi_en(request_vi)
+
+
+def auto_outfit_edit_fn(input_image, request_vi, style: str = "Anime",
+                        resolution: int = 768, progress=None):
+    """✨ ĐỔI ĐỒ TỰ ĐỘNG — 1 prompt, giữ form, chống chibi.
+    Luồng: vision dò quần áo đang mặc → GroundingDINO+SAM mask CHỈ vùng quần áo
+    → SD inpaint vẽ đồ mới vào đúng mask. Mọi thứ ngoài mask (mặt/tóc/tỉ lệ/tư thế/nền)
+    giữ nguyên tuyệt đối. Không cần Flux. Trả về (ảnh, info)."""
+    if input_image is None:
+        raise gr.Error("Chưa có ảnh! Hãy đưa ảnh nhân vật vào trước.")
+    if not (request_vi or "").strip():
+        raise gr.Error("Hãy nhập yêu cầu đổi đồ (vd: 'đổi thành đồ thể thao').")
+    if not get_segment_available():
+        raise gr.Error("Cần node segment-anything (comfyui_segment_anything) — cài rồi restart ComfyUI.")
+
+    if progress: progress(0.05, desc="👁️ Nhìn ảnh, tìm quần áo cần đổi...")
+    target_en = _detect_clothing_targets(input_image, note_vi=request_vi)
+    outfit_en = _enrich_outfit_prompt(request_vi, style)   # #2: mô tả đồ chi tiết cho inpaint
+    print(f"✨ AUTO outfit: dò '{target_en}'  |  đồ mới '{request_vi}' → '{outfit_en}'")
+
+    img = input_image.convert("RGB")
+    w, h = img.size
+    target = int(resolution)
+    scale = min(target / w, target / h)
+    nw = max(64, (int(w * scale) // 64) * 64)
+    nh = max(64, (int(h * scale) // 64) * 64)
+    img = img.resize((nw, nh))
+    if progress: progress(0.15, desc="📤 Upload ảnh lên ComfyUI...")
+    uploaded = upload_image_to_comfy(img)
+    seed = random.randint(1, 2**31)
+
+    model = get_inpaint_model(style if style in ("Anime", "Realistic", "Semi") else "Anime")
+    if not model:
+        raise gr.Error("Không tìm thấy checkpoint inpaint!")
+    print(f"🎨 AUTO inpaint model: {model}")
+
+    style_tag = {"Anime": "anime style", "Realistic": "photorealistic",
+                 "Semi": "semi-realistic digital art"}.get(style, "anime style")
+    full_prompt = (f"{outfit_en}, {style_tag}, same person, same pose, natural body proportions, "
+                   "clean detailed clothing, crisp fabric detail, seamless, highly detailed, best quality")
+    neg_prompt = ("worst quality, low quality, blurry, deformed, extra limbs, bad anatomy, "
+                  "different person, changed face, chibi, super deformed, shrunk body, watermark, text")
+
+    # === Base: GroundingDINO+SAM → GrowMask+FeatherMask → VAEEncodeForInpaint ===
+    # #4: feather 12 cho mép mượt hơn (blend đỡ lộ).
+    wf = {
+        "20": {"class_type": "LoadImage", "inputs": {"image": uploaded}},
+        "30": {"class_type": "GroundingDinoModelLoader (segment anything)",
+               "inputs": {"model_name": "GroundingDINO_SwinT_OGC (694MB)"}},
+        "31": {"class_type": "SAMModelLoader (segment anything)",
+               "inputs": {"model_name": "sam_vit_b (375MB)"}},
+        "32": {"class_type": "GroundingDinoSAMSegment (segment anything)",
+               "inputs": {"grounding_dino_model": ["30", 0], "sam_model": ["31", 0],
+                          "image": ["20", 0], "prompt": target_en, "threshold": 0.3}},
+        "33": {"class_type": "GrowMask",
+               "inputs": {"mask": ["32", 1], "expand": 12, "tapered_corners": True}},
+        "34": {"class_type": "FeatherMask",
+               "inputs": {"mask": ["33", 0], "left": 12, "top": 12, "right": 12, "bottom": 12}},
+        "1":  {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
+        "40": {"class_type": "CLIPTextEncode", "inputs": {"text": full_prompt, "clip": ["1", 1]}},
+        "41": {"class_type": "CLIPTextEncode", "inputs": {"text": neg_prompt, "clip": ["1", 1]}},
+        "42": {"class_type": "VAEEncodeForInpaint",
+               "inputs": {"pixels": ["20", 0], "vae": ["1", 2], "mask": ["34", 0], "grow_mask_by": 6}},
+    }
+
+    # #5: ControlNet canny KHÓA NÉT (giữ dáng/anatomy theo ảnh gốc, chống méo).
+    # Thiếu model canny hoặc tắt cờ → bỏ qua an toàn, chạy inpaint thường.
+    pos_ref, neg_ref = ["40", 0], ["41", 0]
+    cn_used = "off"
+    cn_models = [m for m in get_controlnet_models() if "canny" in m.lower() and not _is_sdxl(m)]
+    if AUTO_MASK_CONTROLNET and cn_models:
+        cn_name = cn_models[0]
+        wf["80"] = {"class_type": "Canny",
+                    "inputs": {"image": ["20", 0], "low_threshold": 0.4, "high_threshold": 0.8}}
+        wf["81"] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": cn_name}}
+        wf["82"] = {"class_type": "ControlNetApplyAdvanced",
+                    "inputs": {"positive": ["40", 0], "negative": ["41", 0], "control_net": ["81", 0],
+                               "image": ["80", 0], "strength": 0.55,
+                               "start_percent": 0.0, "end_percent": 0.85}}
+        pos_ref, neg_ref = ["82", 0], ["82", 1]
+        cn_used = cn_name
+
+    wf["50"] = {"class_type": "KSampler",
+                "inputs": {"model": ["1", 0], "positive": pos_ref, "negative": neg_ref,
+                           "latent_image": ["42", 0], "seed": seed, "steps": 40, "cfg": 7.0,
+                           "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}}
+    wf["60"] = {"class_type": "VAEDecode", "inputs": {"samples": ["50", 0], "vae": ["1", 2]}}
+
+    # === TINH CHỈNH CHẤT LƯỢNG: HIRES trước (chi tiết THẬT) → ESRGAN sau (nét cuối) ===
+    # Thứ tự chuẩn giúp tránh bug tô xám: hires refine ở 1.5x (an toàn 4GB, không nhân đôi
+    # chi tiết như 2x), rồi ESRGAN x4 khử răng cưa lần cuối.
+    final_ref = ["60", 0]
+
+    # #6 HIRES FIX (MẶC ĐỊNH BẬT): phóng ảnh base lên 1.5x rồi vẽ lại CHỈ vùng quần áo
+    # (denoise thấp + mask) → nếp vải/đường may/bóng đổ chi tiết THẬT. Mặt/dáng/nền ngoài mask
+    # khóa nguyên. Segment lại trên ảnh 1.5x để mask khớp size. Tái dùng loaders 30/31, ckpt 1, enc 40/41.
+    hires_used = "off"
+    if AUTO_MASK_HIRES:
+        hw = max(64, (int(nw * 1.5) // 64) * 64)
+        hh = max(64, (int(nh * 1.5) // 64) * 64)
+        wf["88"] = {"class_type": "ImageScale",
+                    "inputs": {"image": final_ref, "upscale_method": "lanczos",
+                               "width": hw, "height": hh, "crop": "disabled"}}
+        wf["90"] = {"class_type": "GroundingDinoSAMSegment (segment anything)",
+                    "inputs": {"grounding_dino_model": ["30", 0], "sam_model": ["31", 0],
+                               "image": ["88", 0], "prompt": target_en, "threshold": 0.3}}
+        wf["91"] = {"class_type": "GrowMask",
+                    "inputs": {"mask": ["90", 1], "expand": 16, "tapered_corners": True}}
+        wf["92"] = {"class_type": "FeatherMask",
+                    "inputs": {"mask": ["91", 0], "left": 14, "top": 14, "right": 14, "bottom": 14}}
+        # ⚠️ REFINE ĐÚNG CÁCH: VAEEncode ẢNH ĐẦY ĐỦ (giữ NGUYÊN chi tiết đồ base) rồi
+        # SetLatentNoiseMask để CHỈ vùng đồ được thêm nhiễu & làm nét. TUYỆT ĐỐI không dùng
+        # VAEEncodeForInpaint ở bước này: nó XÓA vùng mask thành xám → denoise 0.4 dựng không
+        # lại nổi → ra khối xám (đúng bug đang gặp). ForInpaint chỉ hợp bước base (denoise 1.0, vẽ mới).
+        wf["93"] = {"class_type": "VAEEncode",
+                    "inputs": {"pixels": ["88", 0], "vae": ["1", 2]}}
+        wf["96"] = {"class_type": "SetLatentNoiseMask",
+                    "inputs": {"samples": ["93", 0], "mask": ["92", 0]}}
+        # DÙNG conditioning GỐC [40]/[41], KHÔNG dùng pos_ref/neg_ref: ControlNet base tính canny ở
+        # độ phân giải base, hires vẽ ở res cao hơn → lệch size control gây tô xám (bug đã sửa).
+        wf["94"] = {"class_type": "KSampler",
+                    "inputs": {"model": ["1", 0], "positive": ["40", 0], "negative": ["41", 0],
+                               "latent_image": ["96", 0], "seed": seed + 1, "steps": 30, "cfg": 6.5,
+                               "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 0.4}}
+        wf["95"] = {"class_type": "VAEDecode", "inputs": {"samples": ["94", 0], "vae": ["1", 2]}}
+        final_ref = ["95", 0]
+        hires_used = f"on 1.5x → {hw}x{hh} (refine denoise 0.4, chỉ vùng đồ)"
+
+    # #3 UPSCALE ESRGAN (MẶC ĐỊNH BẬT): x4 rồi lanczos thu về 2x base → nét cuối, khử răng cưa.
+    # Thiếu model/tắt cờ → lưu thẳng ảnh hiện tại.
+    up_used = "off"
+    up_models = get_upscale_models()
+    if AUTO_MASK_UPSCALE and up_models:
+        up_name = next((m for m in up_models if "anime" in m.lower()), up_models[0])
+        fw, fh = nw * 2, nh * 2
+        wf["71"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": up_name}}
+        wf["72"] = {"class_type": "ImageUpscaleWithModel",
+                    "inputs": {"upscale_model": ["71", 0], "image": final_ref}}
+        wf["73"] = {"class_type": "ImageScale",
+                    "inputs": {"image": ["72", 0], "upscale_method": "lanczos",
+                               "width": fw, "height": fh, "crop": "disabled"}}
+        final_ref = ["73", 0]
+        up_used = f"{up_name} → {fw}x{fh}"
+
+    wf["70"] = {"class_type": "SaveImage", "inputs": {"images": final_ref, "filename_prefix": "yumeai_auto"}}
+
+    if progress: progress(0.3, desc="🎨 Vẽ đồ mới + tinh chỉnh chi tiết (chất lượng ưu tiên)...")
+    result = run_comfy_job(wf, progress=progress, start_pct=0.3, timeout=COMFY_LONG_TIMEOUT_SEC)
+    info = (f"✨ Đổi đồ tự động (mask-inpaint, giữ form): '{request_vi}'\n"
+            f"👗 vùng dò (GroundingDINO): {target_en}\n"
+            f"👚 đồ mới: {outfit_en}\n"
+            f"🔒 ControlNet canny: {cn_used}\n"
+            f"🔎 Upscale: {up_used}\n"
+            f"🔬 Hires fix: {hires_used}\n"
+            f"📐 base {nw}x{nh} | steps 40 | 🎲 seed:{seed}")
+    return result, info
+
+
+def auto_outfit_handler(current_image, ref_image, request_vi, style, resolution, history):
+    """Nút '✨ Đổi đồ tự động': chạy auto_outfit_edit_fn NGAY, đổ kết quả vào ảnh + ref
+    (kết quả thành ảnh hiện tại mới → đổi tiếp được ngay). Generator để cập nhật UI theo bước."""
+    history = history or []
+    working = current_image if current_image is not None else ref_image
+    user_msg = {"role": "user", "content": f"✨ [auto đổi đồ] {request_vi}"}
+    if working is None:
+        yield _pack_main_outputs(
+            history + [{"role": "assistant", "content": "⚠️ Chưa có ảnh! Upload ảnh vào ô '📎 Ảnh tham chiếu' trước."}],
+            img=None, keep_ref=ref_image, keep_current=current_image, next_tool_once=_empty_tool_once())
+        return
+    if not (request_vi or "").strip():
+        yield _pack_main_outputs(
+            history + [user_msg, {"role": "assistant", "content": "⚠️ Nhập yêu cầu đổi đồ (vd: 'đổi thành đồ thể thao')."}],
+            img=None, keep_ref=working, keep_current=working, next_tool_once=_empty_tool_once())
+        return
+    yield _pack_main_outputs(
+        history + [user_msg, {"role": "assistant", "content": "✨ Đang nhìn ảnh → dò quần áo → mask → vẽ đồ mới (giữ form, ~30–90s)..."}],
+        img=None, keep_ref=working, keep_current=working, next_tool_once=_empty_tool_once())
+    try:
+        img, info = auto_outfit_edit_fn(working, request_vi, style=style,
+                                        resolution=int(resolution), progress=_dummy_progress)
+        done = history + [user_msg, {"role": "assistant",
+               "content": f"✅ Xong! Kết quả đã thành ảnh tham chiếu mới — đổi tiếp được ngay.\n{info}"}]
+        yield _pack_main_outputs(done, img=img, keep_ref=img, keep_current=img, next_tool_once=_empty_tool_once())
+    except Exception as e:
+        yield _pack_main_outputs(
+            history + [user_msg, {"role": "assistant", "content": f"❌ Lỗi đổi đồ tự động: {e}"}],
+            img=None, keep_ref=working, keep_current=working, next_tool_once=_empty_tool_once())
 
 
 # ── Method D: 'mặc theo ảnh' — đưa ảnh trang phục tham chiếu (2 ReferenceLatent nối chuỗi) ──
@@ -2883,8 +3277,7 @@ def garment_transfer_fn(person_image, garment_image, note_vi, progress=None,
     _chain_loras_into(wf, turbo_lora, lora_strength)
 
     if progress: progress(0.15, desc="Đang mặc theo ảnh (Flux Kontext)...")
-    pid = submit_workflow(wf)
-    img = poll_and_download(pid, progress=progress, start_pct=0.15, timeout=COMFY_LONG_TIMEOUT_SEC)
+    img = run_comfy_job(wf, progress=progress, start_pct=0.15, timeout=COMFY_LONG_TIMEOUT_SEC)
     info = (f"👕 Mặc theo ảnh trang phục tham chiếu\n📝 {instruction}\n"
             f"🎚️ guidance:{guidance} | steps:{steps} | 🎲 seed:{seed}")
     return img, info
@@ -3077,6 +3470,55 @@ def arm_garment_once(note_vi, scope, outfit_image=None, chat_message="", kontext
     msg = f"[mặc theo ảnh trang phục | V8.15 | {_scope_label_vi(sc)} | source={source}]\n{note}\n[outfit_ref={_image_debug_tag(outfit_image)}]"
     return tool, msg
 
+def _stream_persona_chat(history, user_msg, text, persona_id,
+                         *, keep_ref=None, keep_current=None, tool_once=None):
+    """Trả lời như nhân vật, có streaming.
+
+    Dùng CHUNG cho cả hai đường: không có ảnh, và có ảnh nhưng người dùng chỉ
+    đang trò chuyện về bức ảnh chứ không đòi sửa nó. Trước đây nhánh thứ hai
+    không tồn tại: smart_execute trả task="chat" với image=None rồi
+    smart_unified_chat ném "Pipeline đã chạy nhưng không trả về ảnh mới."
+    """
+    persona = PERSONAS.get(persona_id) or PERSONA
+    current = history + [user_msg, {"role": "assistant", "content": ""}]
+    yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
+                             keep_current=keep_current, next_tool_once=tool_once)
+
+    # build_persona_messages dựng: system prompt giàu chi tiết + trí nhớ dài
+    # (tóm tắt các lượt đã rơi khỏi cửa sổ) + few-shot giữ giọng + lịch sử gần đây.
+    messages = build_persona_messages(persona, history, text)
+    full = ""
+    try:
+        with httpx.Client(timeout=CHAT_TIMEOUT_SEC) as c:
+            with c.stream("POST", f"{OLLAMA_URL}/api/chat", json={
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "stream": True,
+                "options": chat_options(),
+            }) as resp:
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        continue
+                    full += data.get("message", {}).get("content", "")
+                    current[-1] = {"role": "assistant", "content": full}
+                    yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
+                                             keep_current=keep_current, next_tool_once=tool_once)
+        if not full.strip():
+            current[-1] = {"role": "assistant",
+                           "content": "(Ollama không trả về nội dung. Kiểm tra `ollama serve` "
+                                      f"và model `{OLLAMA_MODEL}` đã tải chưa.)"}
+            yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
+                                     keep_current=keep_current, next_tool_once=tool_once)
+    except Exception as e:
+        current[-1] = {"role": "assistant", "content": f"(Lỗi Ollama: {e})"}
+        yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
+                                 keep_current=keep_current, next_tool_once=tool_once)
+
+
 def smart_unified_chat(
     message, history,
     ref_image, current_image, outfit_image, tool_once,
@@ -3084,7 +3526,8 @@ def smart_unified_chat(
     use_ip, use_reactor, use_esrgan,
     cn_str, face_str,
     use_flux, flux_guidance, flux_steps, flux_turbo,
-    flux_lora_str, kontext_prompt, kontext_review
+    flux_lora_str, kontext_prompt, kontext_review,
+    persona_id="yuki", enrich=True,
 ):
     """
     Handler chính mới:
@@ -3104,7 +3547,6 @@ def smart_unified_chat(
 
     # V8.15: prompt đang gõ / ô EN / note tool phải quy về một nguồn duy nhất trước khi route.
     if tool_mode == "garment":
-        raw_note = (tool_once.get("note") or "").strip()
         effective_note, prompt_source = _pick_effective_prompt_for_tool(text, tool_once, kontext_prompt)
         if not effective_note or effective_note.lower() in {
             "mặc theo ảnh trang phục tham chiếu",
@@ -3158,6 +3600,8 @@ def smart_unified_chat(
         flux_lora_strength=flux_lora_str,
         kontext_prompt=kontext_prompt,
         kontext_review=kontext_review,
+        enrich=enrich,
+        persona_id=persona_id,
     )
 
     # Không có ảnh → chat hoặc text2img
@@ -3172,36 +3616,10 @@ def smart_unified_chat(
 
         # chat thường
         if plan.get("task") == "chat":
-            current = history + [user_msg, {"role": "assistant", "content": ""}]
-            yield _pack_main_outputs(current, img=None, keep_ref=ref_image, keep_current=current_image, next_tool_once=tool_once)
-
-            system = PERSONA["system"]
-            ollama_msgs = []
-            for m in history:
-                role = m.get("role", "")
-                content = m.get("content", "")
-                if role in ("user", "assistant") and isinstance(content, str) \
-                   and not content.startswith(("⏳", "✅", "❌", "📎", "🧠")):
-                    ollama_msgs.append({"role": role, "content": content})
-            ollama_msgs.append({"role": "user", "content": text})
-
-            try:
-                with httpx.Client(timeout=30) as c:
-                    with c.stream("POST", f"{OLLAMA_URL}/api/chat", json={
-                        "model": OLLAMA_MODEL,
-                        "messages": [{"role": "system", "content": system}] + ollama_msgs,
-                        "stream": True
-                    }) as resp:
-                        full = ""
-                        for line in resp.iter_lines():
-                            if line:
-                                data = json.loads(line)
-                                full += data.get("message", {}).get("content", "")
-                                current[-1] = {"role": "assistant", "content": full}
-                                yield _pack_main_outputs(current, img=None, keep_ref=ref_image, keep_current=current_image, next_tool_once=tool_once)
-            except Exception as e:
-                current[-1] = {"role": "assistant", "content": f"(Lỗi Ollama: {e})"}
-                yield _pack_main_outputs(current, img=None, keep_ref=ref_image, keep_current=current_image, next_tool_once=tool_once)
+            yield from _stream_persona_chat(
+                history, user_msg, text, persona_id,
+                keep_ref=ref_image, keep_current=current_image, tool_once=tool_once,
+            )
             return
 
         # text2img
@@ -3244,6 +3662,16 @@ def smart_unified_chat(
             runners=runners,
             tool_once=tool_once,
         )
+
+        # Có ảnh nhưng người dùng chỉ đang trò chuyện về nó (vd "ảnh này đẹp đấy").
+        # Bản cũ rơi thẳng xuống raise gr.Error vì task="chat" luôn trả image=None.
+        if result.get("task") == "chat":
+            yield from _stream_persona_chat(
+                history, user_msg, text, persona_id,
+                keep_ref=working_image, keep_current=current_image or working_image,
+                tool_once=_empty_tool_once(),
+            )
+            return
 
         out_img = result["image"]
         if out_img is None:
@@ -3315,6 +3743,13 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
         # ── Cột phải: Cài đặt ──────────────────
         with gr.Column(scale=1, min_width=200):
             gr.Markdown("### ⚙️ Cài đặt")
+            # Trước đây UI khoá cứng vào PERSONA (=Yuki): Hana có trong personas.py
+            # nhưng không cách nào gọi ra được từ giao diện.
+            persona_dd = gr.Dropdown(
+                choices=[(v["name"], k) for k, v in PERSONAS.items()],
+                value=next(iter(PERSONAS)),
+                label="👤 Nhân vật",
+            )
             style = gr.Radio(["Anime","Realistic","Semi"], value="Anime", label="Phong cách")
             resolution = gr.Radio(["384","512","640","768"], value="512", label="Độ phân giải")
             enrich = gr.Checkbox(value=True,
@@ -3370,6 +3805,13 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
                 rg_target = gr.Textbox(label="Vùng cần đổi (món đồ + màu)", placeholder="váy đỏ", lines=1)
                 rg_outfit = gr.Textbox(label="Đồ mới", placeholder="bikini đỏ mát mẻ", lines=1)
                 region_btn = gr.Button("🎯 Đổi đồ vùng này", variant="primary", size="sm")
+            with gr.Accordion("✨ Đổi đồ TỰ ĐỘNG (giữ form, chống chibi — mask+inpaint)", open=True):
+                gr.Markdown("<small><b>1 prompt là xong:</b> tự nhìn ảnh → dò quần áo → khoanh mask → "
+                            "vẽ đồ mới CHỈ trong vùng đó. Mặt/tóc/tỉ lệ/tư thế/nền giữ nguyên (không thể chibi). "
+                            "Nhanh hơn Flux nhiều, KHÔNG cần bật Flux. Ảnh lấy từ ô '📎 Ảnh tham chiếu'. "
+                            "(Cần segment-anything.)</small>")
+                auto_target = gr.Textbox(label="Đổi thành đồ gì?", placeholder="đổi thành đồ thể thao", lines=1)
+                auto_btn = gr.Button("✨ Đổi đồ tự động", variant="primary", size="sm")
             with gr.Accordion("👕 Mặc theo ảnh trang phục (đưa ảnh bộ đồ)", open=False):
                 gr.Markdown("<small>Cần đúng 1 bộ đồ cụ thể? Đưa <b>ảnh bộ đồ</b> vào đây — Kontext mặc bộ đó lên "
                             "nhân vật trong 'Ảnh hiện tại / ảnh cần sửa' (giữ mặt/tóc/dáng). Dùng 2 ReferenceLatent nối chuỗi "
@@ -3404,7 +3846,8 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
             use_ip, use_reactor, use_esrgan,
             cn_str, face_str,
             use_flux, flux_guidance, flux_steps, flux_turbo,
-            flux_lora_str, kontext_prompt, kontext_review
+            flux_lora_str, kontext_prompt, kontext_review,
+            persona_dd, enrich,
         ]
 
     # 🔒 NET AN TOÀN mới: số input phải khớp smart_unified_chat
@@ -3425,6 +3868,13 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
         arm_region_once,
         inputs=[rg_target, rg_outfit],
         outputs=[tool_once, msg_input]
+    )
+
+    # ✨ Nút đổi đồ TỰ ĐỘNG (mask+inpaint) — chạy NGAY, không qua tool_once như region/garment.
+    auto_btn.click(
+        auto_outfit_handler,
+        inputs=[current_image, ref_input, auto_target, style, resolution, chatbot],
+        outputs=[chatbot, gen_image, ref_input, current_image, tool_once]
     )
 
     garment_btn.click(
@@ -3463,6 +3913,10 @@ if __name__ == "__main__":
     print("="*55)
     print(f"🔒 UI inputs ({len(shared_inputs)}) khớp smart_unified_chat params "
           f"({len(inspect.signature(smart_unified_chat).parameters)}) ✅")
+    _model_warn = check_chat_model()
+    if _model_warn:
+        print(_model_warn)
+        print("-" * 55)
     threading.Thread(target=warmup_ollama, daemon=True).start()  # 🔥 nạp model dịch nền
     print(check_status())
     print("-"*55)

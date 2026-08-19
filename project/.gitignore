@@ -7,3 +7,8 @@ __pycache__/
 ComfyUI/
 
 ComfyUI/
+
+# Cong cu ben thu ba / file sinh ra - khong thuoc du an
+.codegraph/
+codegraph-main/
+headroom-main/

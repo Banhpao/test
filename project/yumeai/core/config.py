@@ -19,7 +19,61 @@ COMFY_TIMEOUT_SEC = int(os.getenv("YUMEAI_COMFY_TIMEOUT_SEC", "1800"))
 #   $env:YUMEAI_VERIFY_TIMEOUT_SEC="300"
 VERIFY_TIMEOUT_SEC = int(os.getenv("YUMEAI_VERIFY_TIMEOUT_SEC", "300"))
 
+# ✨ Đổi đồ trong CHAT: ưu tiên mask+inpaint (giữ form, chống chibi, nhanh) thay vì Flux Kontext
+# khi máy có node segment-anything. Đặt "0" để quay lại Flux Kontext như cũ.
+#   $env:YUMEAI_AUTO_MASK_EDIT="0"
+AUTO_MASK_EDIT = os.getenv("YUMEAI_AUTO_MASK_EDIT", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+# ✨ Nâng chất lượng auto mask-inpaint (đều thiếu node thì tự bỏ qua, không lỗi).
+#   HIRES FIX : vẽ lại vùng đồ ở 1.5x (chi tiết THẬT: nếp vải, đường may). MẶC ĐỊNH BẬT —
+#               đã sửa bug tô xám (chạy 1.5x an toàn 4GB, dùng conditioning gốc). Tắt: "0".
+#   UPSCALE   : ESRGAN x4 → thu về 2x cho nét cuối (an toàn, MẶC ĐỊNH BẬT).
+#   CONTROLNET: canny khóa nét. MẶC ĐỊNH TẮT — trên SD1.5 + ảnh nhỏ dễ washout màu.
+#               Bật để thử:  $env:YUMEAI_AUTO_MASK_CONTROLNET="1"
+AUTO_MASK_UPSCALE = os.getenv("YUMEAI_AUTO_MASK_UPSCALE", "1").strip().lower() not in {"0", "false", "off", "no"}
+AUTO_MASK_CONTROLNET = os.getenv("YUMEAI_AUTO_MASK_CONTROLNET", "0").strip().lower() not in {"0", "false", "off", "no"}
+AUTO_MASK_HIRES = os.getenv("YUMEAI_AUTO_MASK_HIRES", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+# ══════════════════════════════════════════════════════════════════════════
+# CHAT — cấu hình dùng CHUNG cho app_gradio.py và main.py (xem chat_context.py)
+# ══════════════════════════════════════════════════════════════════════════
+# Số message lịch sử tối đa đưa vào ngữ cảnh mỗi lượt chat. Quá nhiều thì tràn
+# context window và model bắt đầu trả lời lạc đề mà KHÔNG báo lỗi gì.
+#   $env:YUMEAI_CHAT_HISTORY_MAX="12"
+# Timeout (giây) cho một lượt chat streaming. Trước đây app_gradio.py dùng 30s còn
+# main.py dùng 120s — cùng một model mà hai cửa vào bỏ cuộc ở hai mốc khác nhau.
+#   $env:YUMEAI_CHAT_TIMEOUT_SEC="120"
+# ── Tham số sinh câu trả lời. Model nhỏ rất dễ lặp từ/lặp câu nên cần
+# repeat_penalty; top_p giữ câu tự nhiên mà không lan man.
+CHAT_TEMPERATURE = float(os.getenv("YUMEAI_CHAT_TEMPERATURE", "0.85"))
+CHAT_TOP_P = float(os.getenv("YUMEAI_CHAT_TOP_P", "0.92"))
+CHAT_REPEAT_PENALTY = float(os.getenv("YUMEAI_CHAT_REPEAT_PENALTY", "1.12"))
+CHAT_NUM_PREDICT = int(os.getenv("YUMEAI_CHAT_NUM_PREDICT", "220"))
+
+# Few-shot: chèn vài lượt thoại mẫu trước lịch sử để model nhỏ khỏi tuột vai.
+# Tắt nếu muốn tiết kiệm context: $env:YUMEAI_CHAT_FEWSHOT="0"
+CHAT_FEWSHOT = os.getenv("YUMEAI_CHAT_FEWSHOT", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+# Trí nhớ dài: nén các lượt đã rơi ra khỏi cửa sổ lịch sử thành vài gạch đầu dòng
+# rồi nhét vào system prompt. Đây là thứ tạo cảm giác "nhân vật nhớ mình".
+CHAT_SUMMARY = os.getenv("YUMEAI_CHAT_SUMMARY", "1").strip().lower() not in {"0", "false", "off", "no"}
+# Cứ thêm bấy nhiêu message bị đẩy ra ngoài cửa sổ thì mới tóm tắt lại một lần
+# (tóm tắt mỗi lượt sẽ tốn thêm một lời gọi LLM cho mỗi tin nhắn).
+CHAT_SUMMARY_EVERY = int(os.getenv("YUMEAI_CHAT_SUMMARY_EVERY", "6"))
+
+CHAT_TIMEOUT_SEC = int(os.getenv("YUMEAI_CHAT_TIMEOUT_SEC", "120"))
+
+CHAT_HISTORY_MAX_MESSAGES = int(os.getenv("YUMEAI_CHAT_HISTORY_MAX", "12"))
+
+# Context window cho chat. Máy 4GB VRAM: 4096 là an toàn; hạ xuống 2048 nếu thấy
+# Ollama đẩy model ra RAM (chạy chậm hẳn).
+#   $env:YUMEAI_CHAT_NUM_CTX="4096"
+CHAT_NUM_CTX = int(os.getenv("YUMEAI_CHAT_NUM_CTX", "4096"))
+
+# Trước đây hardcode r"D:\baitap\code py\formyhorny\ComfyUI\models" nên chỉ đúng
+# trên đúng một máy Windows. Nay tự dò theo vị trí package, vẫn override được bằng env.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COMFY_MODELS_DIR = os.getenv(
     "COMFY_MODELS_DIR",
-    r"D:\baitap\code py\formyhorny\ComfyUI\models"
+    os.path.join(_PROJECT_ROOT, "ComfyUI", "models"),
 )

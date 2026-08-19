@@ -7,8 +7,13 @@ Chạy: python fix_dino.py
 import os
 import re
 
-# Đường dẫn file bertwarper.py
-BASE = r"D:\baitap\code py\formyhorny\ComfyUI\custom_nodes\comfyui_segment_anything\local_groundingdino\models\GroundingDINO"
+# Đường dẫn file bertwarper.py — tự dò theo vị trí script này, KHÔNG hardcode
+# ổ D nữa (bản cũ chỉ chạy đúng trên một máy Windows duy nhất).
+# Vẫn override được:  $env:COMFYUI_DIR="D:\...\ComfyUI"
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+COMFYUI_DIR = os.getenv("COMFYUI_DIR", os.path.join(_PROJECT_ROOT, "ComfyUI"))
+BASE = os.path.join(COMFYUI_DIR, "custom_nodes", "comfyui_segment_anything",
+                    "local_groundingdino", "models", "GroundingDINO")
 TARGET = os.path.join(BASE, "bertwarper.py")
 
 

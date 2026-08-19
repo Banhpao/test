@@ -29,7 +29,9 @@ import os
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 
+from yumeai.core.config import COMFY_TIMEOUT_SEC
 from yumeai.services.comfy_service import submit_workflow as _raw_submit_workflow
 from yumeai.services.comfy_service import poll_and_download as _raw_poll_and_download
 
@@ -184,8 +186,40 @@ def release_generation_slot() -> None:
     print(f"🛡️ Resource Guard: END {label} ({elapsed}s)")
 
 
+@contextmanager
+def comfy_job(label: str = "ComfyUI workflow"):
+    """Giữ slot ComfyUI trong đúng MỘT khối lệnh.
+
+    Cách cũ tách đôi: acquire nằm trong guarded_submit_workflow, release nằm trong
+    guarded_poll_and_download — hai hàm khác nhau. Chỉ cần một exception hay một
+    `return` xen vào giữa hai lời gọi là slot bị giữ mãi, app báo "đang bận" cho
+    tới khi restart tiến trình (và với file lock thì cả tiến trình khác cũng kẹt).
+    """
+    acquire_generation_slot(label)
+    try:
+        yield
+    finally:
+        release_generation_slot()
+
+
+def run_comfy_job(workflow, progress=None, start_pct=0.3, timeout=None,
+                  *, label="ComfyUI workflow"):
+    """Gửi workflow + chờ ảnh trong CÙNG một khối có khóa. Đây là cách nên dùng.
+
+    Trả về PIL.Image. Mọi lỗi (bận / ComfyUI chết / timeout) đều nhả slot trước khi ném.
+    """
+    if timeout is None:
+        timeout = COMFY_TIMEOUT_SEC
+    with comfy_job(label):
+        prompt_id = _raw_submit_workflow(workflow)
+        return _raw_poll_and_download(prompt_id, progress, start_pct, timeout)
+
+
+# ── Tương thích ngược ────────────────────────────────────────────────────
+# Hai hàm dưới đây CHỈ an toàn khi được gọi liền nhau, không có gì chen giữa.
+# Code mới nên dùng run_comfy_job()/comfy_job() ở trên.
 def guarded_submit_workflow(workflow, *args, **kwargs):
-    """Wrapper submit_workflow có Resource Guard — dùng chung cho mọi entrypoint."""
+    """DEPRECATED — dùng run_comfy_job(). Xem docstring comfy_job()."""
     acquire_generation_slot("ComfyUI workflow")
     try:
         return _raw_submit_workflow(workflow, *args, **kwargs)
@@ -195,7 +229,7 @@ def guarded_submit_workflow(workflow, *args, **kwargs):
 
 
 def guarded_poll_and_download(*args, **kwargs):
-    """Luôn nhả lock kể cả khi timeout/lỗi để app không bị kẹt trạng thái bận."""
+    """DEPRECATED — dùng run_comfy_job(). Luôn nhả lock kể cả khi timeout/lỗi."""
     try:
         return _raw_poll_and_download(*args, **kwargs)
     finally:

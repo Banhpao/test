@@ -12,6 +12,11 @@ import httpx
 from yumeai.core.config import OLLAMA_URL, OLLAMA_MODEL
 
 def _pick_translate_model():
+    """Trả về (model, chắc_chắn).
+
+    chắc_chắn=False nghĩa là KHÔNG hỏi được Ollama nên đang đoán bừa — kết quả
+    này không được cache lại.
+    """
     prefer = ["qwen2.5:3b", "qwen2.5:7b", "gemma2:2b", "llama3.2:3b"]
     try:
         with httpx.Client(timeout=5) as c:
@@ -20,15 +25,53 @@ def _pick_translate_model():
             for p in prefer:
                 if any(p in name for name in installed):
                     print(f"🌐 Translate model: {p}")
-                    return p
-    except Exception:
-        pass
-    print(f"🌐 Translate model: {OLLAMA_MODEL} (mặc định)")
-    return OLLAMA_MODEL
+                    return p, True
+            # Ollama TRẢ LỜI được nhưng không có model ưu tiên nào → chốt luôn.
+            print(f"🌐 Translate model: {OLLAMA_MODEL} (không có model ưu tiên)")
+            return OLLAMA_MODEL, True
+    except Exception as e:
+        print(f"🌐 Translate model: {OLLAMA_MODEL} (tạm thời — chưa hỏi được Ollama: {e})")
+        return OLLAMA_MODEL, False
 
-TRANSLATE_MODEL = _pick_translate_model()
+
+_TRANSLATE_MODEL_CACHE = None
+
+
+def get_translate_model(force_refresh: bool = False) -> str:
+    """Dò model dịch LƯỜI (lần dùng đầu tiên), và chỉ cache khi thật sự hỏi được Ollama.
+
+    Bản cũ chạy _pick_translate_model() ngay lúc import. Nếu Ollama chưa bật khi
+    khởi động app thì nó rơi về llama3.2:1b và KHOÁ CỨNG cả phiên — bật Ollama
+    sau đó có qwen2.5:3b cũng vô ích, phải restart app mới nhận.
+    Nay: chưa hỏi được thì lần gọi sau tự thử lại.
+    """
+    global _TRANSLATE_MODEL_CACHE
+    if force_refresh:
+        _TRANSLATE_MODEL_CACHE = None
+    if _TRANSLATE_MODEL_CACHE is None:
+        model, confident = _pick_translate_model()
+        if confident:
+            _TRANSLATE_MODEL_CACHE = model
+        return model
+    return _TRANSLATE_MODEL_CACHE
+
+
+# CỐ Ý không còn hằng TRANSLATE_MODEL ở cấp module nữa: `from ... import TRANSLATE_MODEL`
+# sẽ chốt giá trị ngay lúc import, đúng cái bug cần sửa. Dùng get_translate_model().
+
 
 def translate_vi_en(vi_text: str) -> str:
+    """Giữ chữ ký cũ. Muốn biết dịch có thành công không thì dùng translate_vi_en_ex."""
+    return translate_vi_en_ex(vi_text)[0]
+
+
+def translate_vi_en_ex(vi_text: str) -> tuple[str, bool]:
+    """Dịch VI→EN. Trả về (text, ok).
+
+    ok=False nghĩa là KHÔNG dịch được và `text` vẫn đang là tiếng Việt.
+    Bản cũ chỉ trả về chuỗi nên lỗi dịch hoàn toàn im lặng: prompt tiếng Việt đi
+    thẳng vào Stable Diffusion, người dùng chỉ thấy ảnh rác mà không hiểu vì sao.
+    """
     system = """You are a precise Vietnamese→English translator for image prompts.
 Translate ONLY what is written. Do NOT add objects, styles, settings, or concepts not in the input.
 Output ONLY a short comma-separated list of English keywords (max 8). No sentences, no quotes, no explanation.
@@ -44,7 +87,7 @@ Examples:
     try:
         with httpx.Client(timeout=20) as c:
             r = c.post(f"{OLLAMA_URL}/api/chat", json={
-                "model": TRANSLATE_MODEL,
+                "model": get_translate_model(),
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": vi_text}
@@ -61,10 +104,13 @@ Examples:
             en = ", ".join(parts)
             print(f"🔤 VI: {vi_text}")
             print(f"🔤 EN: {en}")
-            return en if len(en) > 3 else vi_text
+            if len(en) > 3:
+                return en, True
+            print("⚠️ Ollama trả về chuỗi rỗng/quá ngắn → giữ nguyên tiếng Việt")
+            return vi_text, False
     except Exception as e:
-        print(f"❌ Translation error: {e}")
-        return vi_text
+        print(f"❌ Translation error: {e} → giữ nguyên tiếng Việt (ảnh sẽ SAI)")
+        return vi_text, False
 
 def _ollama_chat(model, system, user, *, temperature=0.2, num_predict=160,
                  timeout=30, retries=2):
@@ -92,7 +138,7 @@ def _ollama_chat(model, system, user, *, temperature=0.2, num_predict=160,
 def warmup_ollama():
     """Nạp sẵn model dịch + chat vào RAM để lần gọi đầu không chậm/timeout.
     Ollama nạp model lazy — call rỗng này 'làm nóng' trước. Chạy nền (daemon thread)."""
-    for m in {TRANSLATE_MODEL, OLLAMA_MODEL}:
+    for m in {get_translate_model(), OLLAMA_MODEL}:
         try:
             with httpx.Client(timeout=60) as c:
                 c.post(f"{OLLAMA_URL}/api/chat", json={
@@ -106,6 +152,11 @@ def warmup_ollama():
             print(f"⚠️ Warmup {m} lỗi (bỏ qua): {e}")
 
 def enrich_for_create(vi_text: str, style: str = "Anime") -> str:
+    """Giữ chữ ký cũ. Cần biết thành/bại thì dùng enrich_for_create_ex."""
+    return enrich_for_create_ex(vi_text, style)[0]
+
+
+def enrich_for_create_ex(vi_text: str, style: str = "Anime") -> tuple[str, bool]:
     """LLM 'LÀM GIÀU' prompt — học cách ChatGPT/Gemini mở rộng câu ngắn thành mô tả chi tiết (cho TẠO ảnh mới).
     Giữ ĐÚNG nội dung người dùng nêu (chủ thể, trang phục, bối cảnh), chỉ THÊM chi tiết bổ trợ:
     ngoại hình, biểu cảm, ánh sáng, không khí, bố cục/ống kính, từ khóa chất lượng.
@@ -135,7 +186,7 @@ Examples:
     try:
         with httpx.Client(timeout=40) as c:
             r = c.post(f"{OLLAMA_URL}/api/chat", json={
-                "model": TRANSLATE_MODEL,
+                "model": get_translate_model(),
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": vi_text}],
                 "stream": False,
@@ -149,8 +200,68 @@ Examples:
                     en = en[len(pre):].strip()
             print(f"🧠 Enrich VI: {vi_text}")
             print(f"🧠 Enrich EN: {en}")
-            return en if len(en) > 10 else translate_vi_en(vi_text)
+            if len(en) > 10:
+                return en, True
+            print("⚠️ Enrich trả về quá ngắn → lùi về dịch tag thường")
+            return translate_vi_en_ex(vi_text)
     except Exception as e:
         print(f"❌ Enrich error: {e} → lùi về dịch thường")
-        return translate_vi_en(vi_text)
+        return translate_vi_en_ex(vi_text)
 
+
+
+def summarize_conversation(messages: list) -> str:
+    """Nén các lượt cũ thành vài gạch đầu dòng SỰ KIỆN để nhét vào system prompt.
+
+    Đây là "trí nhớ dài" phiên bản rẻ tiền: thay vì giữ nguyên 50 lượt cũ (tràn
+    context, model càng nhớ càng loạn), ta giữ lại phần cốt lõi dưới dạng fact.
+    """
+    if not messages:
+        return ""
+    transcript = "\n".join(
+        f"{'Người dùng' if m.get('role') == 'user' else 'Nhân vật'}: {m.get('content', '')}"
+        for m in messages
+    )[:6000]
+
+    system = """Bạn là bộ nhớ của một nhân vật trong ứng dụng trò chuyện.
+Đọc đoạn hội thoại và rút ra những điều ĐÁNG NHỚ về người dùng và về mối quan hệ.
+
+CHỈ ghi những gì thực sự có trong hội thoại. TUYỆT ĐỐI không suy diễn, không bịa.
+Ưu tiên: tên, tuổi, nghề, nơi ở, sở thích, chuyện đang xảy ra trong đời họ,
+lời hứa đã trao đổi, chủ đề nhạy cảm cần tránh, cách xưng hô hai bên dùng.
+
+Xuất ra tối đa 8 gạch đầu dòng tiếng Việt, mỗi dòng một ý ngắn.
+Không mở đầu, không kết luận, không giải thích. Nếu không có gì đáng nhớ, trả về đúng chữ: (chưa có)"""
+
+    out = _ollama_chat(get_translate_model(), system, transcript,
+                       temperature=0.1, num_predict=300, timeout=60, retries=1)
+    out = (out or "").strip()
+    if not out or out.startswith("(chưa có"):
+        return ""
+    print(f"🧠 Memory summary:\n{out}")
+    return out
+
+
+# Model chat quá nhỏ thì không cách nào "thông minh" được, dù prompt có tốt đến đâu.
+_TINY_MARKERS = ("0.5b", "1b", "1.5b", "tinyllama", "qwen2.5:0.5b", "smollm")
+RECOMMENDED_CHAT_MODELS = [
+    ("~5GB RAM trở lên", "qwen2.5:7b", "tốt nhất cho tiếng Việt trong tầm chạy được"),
+    ("~5GB RAM trở lên", "llama3.1:8b", "hội thoại tự nhiên, tiếng Việt khá"),
+    ("~3GB RAM", "qwen2.5:3b", "nhẹ, tiếng Việt vẫn ổn — tối thiểu nên dùng"),
+]
+
+
+def check_chat_model() -> str:
+    """Trả về chuỗi cảnh báo nếu model chat đang dùng quá nhỏ, '' nếu ổn."""
+    name = (OLLAMA_MODEL or "").lower()
+    if not any(m in name for m in _TINY_MARKERS):
+        return ""
+    lines = [
+        f"⚠️  Model chat đang dùng: {OLLAMA_MODEL} — đây là model RẤT NHỎ.",
+        "   Nhân vật sẽ trả lời cụt, hay tuột vai và không giữ được mạch hội thoại.",
+        "   Đây là nguyên nhân lớn nhất khiến chat có cảm giác 'ngu', lớn hơn cả prompt.",
+        "   Nên đổi sang (chạy `ollama pull <tên>` rồi đặt $env:OLLAMA_MODEL):",
+    ]
+    for ram, model, note in RECOMMENDED_CHAT_MODELS:
+        lines.append(f"     • {model:<16} {ram:<20} — {note}")
+    return "\n".join(lines)

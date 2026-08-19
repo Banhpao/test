@@ -24,6 +24,38 @@ class ComfyUIError(Exception):
     """
     pass
 
+COMFY_DOWN_MSG = (
+    "🔴 Không kết nối được ComfyUI tại {url}.\n"
+    "ComfyUI CHÍNH LÀ bộ phận vẽ ảnh của YumeAI — không có nó thì không tạo hay sửa\n"
+    "được ảnh nào (text2img, ControlNet, Flux Kontext, inpaint, upscale đều chạy ở đó).\n"
+    "Mở một cửa sổ terminal RIÊNG và chạy:\n"
+    "    cd <thư mục project>/ComfyUI\n"
+    "    python main.py --lowvram\n"
+    "Đợi thấy dòng 'To see the GUI go to: http://127.0.0.1:8188' rồi thử lại.\n"
+    "(chi tiết: {err})"
+)
+
+
+def comfy_is_up(timeout: float = 3.0) -> bool:
+    """Ping nhanh ComfyUI. Không ném lỗi, chỉ trả True/False."""
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            return c.get(f"{COMFY_URL}/system_stats").status_code == 200
+    except Exception:
+        return False
+
+
+def ensure_comfy_ready(err: str = "không phản hồi") -> None:
+    """Ném ComfyUIError với hướng dẫn cụ thể nếu ComfyUI chưa chạy.
+
+    Trước đây khi ComfyUI tắt, người dùng chỉ nhận được "Không tìm thấy model!" —
+    thông báo này khiến ai cũng đi tìm file checkpoint trong khi vấn đề thật là
+    server chưa bật.
+    """
+    if not comfy_is_up():
+        raise ComfyUIError(COMFY_DOWN_MSG.format(url=COMFY_URL, err=err))
+
+
 def _fetch_model_list(node_class: str, input_field: str) -> list:
     """
     Helper chung: lấy danh sách model từ ComfyUI object_info.
@@ -95,7 +127,13 @@ def get_checkpoint_model(style="Anime", prefer_realistic=None) -> str:
     models = _fetch_model_list("CheckpointLoaderSimple", "ckpt_name")
     print(f"📦 Available models: {models}")
     if not models:
-        return ""
+        # Danh sách rỗng có HAI nguyên nhân rất khác nhau — phải nói rõ cái nào.
+        ensure_comfy_ready("không lấy được danh sách checkpoint")
+        raise ComfyUIError(
+            "ComfyUI đang chạy nhưng KHÔNG có checkpoint nào trong "
+            "models/checkpoints/. Tải một model SD 1.5 (vd anything-v5, "
+            "meinamix) bỏ vào thư mục đó rồi bấm Refresh."
+        )
 
     # Chỉ xét SD 1.5 hoàn chỉnh (loại SDXL, LoRA, inpaint, model UNet-only thiếu CLIP/VAE)
     def _ok(m):
@@ -190,31 +228,41 @@ def upload_image_to_comfy(pil_image: Image.Image) -> str:
     pil_image.save(buf, format="PNG")
     buf.seek(0)
     fname = f"yumeai_{uuid.uuid4().hex[:8]}.png"
-    with httpx.Client(timeout=30) as c:
-        files = {"image": (fname, buf, "image/png")}
-        r = c.post(f"{COMFY_URL}/upload/image", files=files, data={"overwrite": "true"})
-        if r.status_code != 200:
-            raise ComfyUIError(f"Upload ảnh lỗi: {r.text}")
-        uploaded = r.json().get("name", fname)
-        print(f"📤 Uploaded: {uploaded}")
-        return uploaded
+    try:
+        with httpx.Client(timeout=30) as c:
+            files = {"image": (fname, buf, "image/png")}
+            r = c.post(f"{COMFY_URL}/upload/image", files=files, data={"overwrite": "true"})
+    except httpx.RequestError as e:
+        raise ComfyUIError(COMFY_DOWN_MSG.format(url=COMFY_URL, err=e))
+
+    if r.status_code != 200:
+        raise ComfyUIError(f"Upload ảnh lỗi: {r.text}")
+    uploaded = r.json().get("name", fname)
+    print(f"📤 Uploaded: {uploaded}")
+    return uploaded
 
 def submit_workflow(workflow: dict) -> str:
     """Gửi workflow lên ComfyUI, trả về prompt_id"""
     client_id = str(uuid.uuid4())
-    with httpx.Client(timeout=15) as c:
-        r = c.post(f"{COMFY_URL}/prompt",
-                   json={"prompt": workflow, "client_id": client_id})
-        if r.status_code != 200:
-            raise ComfyUIError(f"ComfyUI từ chối: {r.text}")
-        pid = r.json()["prompt_id"]
-        print(f"📤 Job: {pid}")
-        return pid
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(f"{COMFY_URL}/prompt",
+                       json={"prompt": workflow, "client_id": client_id})
+    except httpx.RequestError as e:
+        raise ComfyUIError(COMFY_DOWN_MSG.format(url=COMFY_URL, err=e))
+
+    if r.status_code != 200:
+        raise ComfyUIError(f"ComfyUI từ chối: {r.text}")
+    pid = r.json()["prompt_id"]
+    print(f"📤 Job: {pid}")
+    return pid
 
 def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300) -> Image.Image:
     """Poll ComfyUI history → download ảnh → PIL Image"""
     start = time.time()
     img_info = None
+    consecutive_conn_errors = 0
+    MAX_CONN_ERRORS = 5   # ~10s (mỗi vòng poll sleep 2s) rồi mới kết luận là chết
     with httpx.Client(timeout=10) as c:
         while time.time() - start < timeout:
             time.sleep(2)
@@ -241,8 +289,18 @@ def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300)
                     break
             except ComfyUIError:
                 raise
+            except httpx.RequestError as e:
+                # ComfyUI chết GIỮA CHỪNG: bản cũ nuốt lỗi rồi poll tiếp cho tới
+                # khi hết timeout (mặc định 30 PHÚT) mới báo "Timeout".
+                consecutive_conn_errors += 1
+                print(f"⚠️ Poll (mất kết nối {consecutive_conn_errors}/{MAX_CONN_ERRORS}): {e}")
+                if consecutive_conn_errors >= MAX_CONN_ERRORS and not comfy_is_up():
+                    raise ComfyUIError(COMFY_DOWN_MSG.format(url=COMFY_URL, err=e))
             except Exception as e:
+                consecutive_conn_errors = 0
                 print(f"⚠️ Poll: {e}")
+            else:
+                consecutive_conn_errors = 0
 
     if not img_info:
         raise ComfyUIError("Timeout — ComfyUI chạy quá lâu")
@@ -260,6 +318,71 @@ def poll_and_download(prompt_id: str, progress=None, start_pct=0.3, timeout=300)
         progress(1.0, desc="✅ Xong!")
     return img
 
+# ══════════════════════════════════════════════════════════════════════════
+# PRESET CHẤT LƯỢNG / UPSCALE — nguồn DUY NHẤT
+#
+# Trước đây ba nơi dùng ba chuỗi khác nhau: UI preset "Không upscale", main.py mặc
+# định "Không", còn build_quality_workflow chỉ so khớp "2x (ESRGAN)"/"1.5x (Latent)".
+# Gõ sai một ký tự là im lặng bỏ qua upscale, không báo lỗi gì.
+# ══════════════════════════════════════════════════════════════════════════
+UPSCALE_NONE = "Không upscale"
+UPSCALE_ESRGAN_2X = "2x (ESRGAN)"
+UPSCALE_LATENT_15X = "1.5x (Latent)"
+
+QUALITY_FAST = "Nhanh (20 steps)"
+QUALITY_BALANCED = "Cân bằng (28 steps)"
+QUALITY_HIGH = "Cao (35 steps)"
+QUALITY_BEST = "Tốt nhất (50 steps)"
+
+QUALITY_PRESETS = {
+    QUALITY_FAST:     {"steps": 20, "cfg": 7.0, "sampler": "euler",           "scheduler": "normal"},
+    QUALITY_BALANCED: {"steps": 28, "cfg": 7.5, "sampler": "dpm_2",           "scheduler": "karras"},
+    QUALITY_HIGH:     {"steps": 35, "cfg": 8.0, "sampler": "dpm_2_ancestral", "scheduler": "karras"},
+    QUALITY_BEST:     {"steps": 50, "cfg": 8.5, "sampler": "dpm_2_ancestral", "scheduler": "karras"},
+}
+
+_UPSCALE_ALIASES = {
+    "": UPSCALE_NONE, "không": UPSCALE_NONE, "khong": UPSCALE_NONE,
+    "không upscale": UPSCALE_NONE, "none": UPSCALE_NONE, "no": UPSCALE_NONE, "off": UPSCALE_NONE,
+    "2x (esrgan)": UPSCALE_ESRGAN_2X, "2x": UPSCALE_ESRGAN_2X, "esrgan": UPSCALE_ESRGAN_2X,
+    "1.5x (latent)": UPSCALE_LATENT_15X, "1.5x": UPSCALE_LATENT_15X, "latent": UPSCALE_LATENT_15X,
+}
+
+_QUALITY_ALIASES = {
+    "nhanh": QUALITY_FAST, "fast": QUALITY_FAST, "20": QUALITY_FAST,
+    "cân bằng": QUALITY_BALANCED, "can bang": QUALITY_BALANCED,
+    "balanced": QUALITY_BALANCED, "28": QUALITY_BALANCED,
+    "cao": QUALITY_HIGH, "high": QUALITY_HIGH, "35": QUALITY_HIGH,
+    "tốt nhất": QUALITY_BEST, "tot nhat": QUALITY_BEST, "best": QUALITY_BEST, "50": QUALITY_BEST,
+}
+
+
+def normalize_upscale(value: str) -> str:
+    """Quy mọi cách viết về một trong ba hằng UPSCALE_*. Giá trị lạ thì CẢNH BÁO."""
+    raw = (value or "").strip()
+    if raw in (UPSCALE_NONE, UPSCALE_ESRGAN_2X, UPSCALE_LATENT_15X):
+        return raw
+    hit = _UPSCALE_ALIASES.get(raw.lower())
+    if hit:
+        return hit
+    print(f"⚠️ upscale='{raw}' không hợp lệ → dùng '{UPSCALE_NONE}'. "
+          f"Giá trị hợp lệ: {UPSCALE_NONE} | {UPSCALE_ESRGAN_2X} | {UPSCALE_LATENT_15X}")
+    return UPSCALE_NONE
+
+
+def normalize_quality(value: str) -> str:
+    """Quy mọi cách viết về một key của QUALITY_PRESETS. Giá trị lạ thì CẢNH BÁO."""
+    raw = (value or "").strip()
+    if raw in QUALITY_PRESETS:
+        return raw
+    hit = _QUALITY_ALIASES.get(raw.lower())
+    if hit:
+        return hit
+    print(f"⚠️ quality='{raw}' không hợp lệ → dùng '{QUALITY_BALANCED}'. "
+          f"Giá trị hợp lệ: {' | '.join(QUALITY_PRESETS)}")
+    return QUALITY_BALANCED
+
+
 def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscale,
                             width=512, height=768, latent_source=None) -> dict:
     """
@@ -272,12 +395,9 @@ def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscal
         if height < 768: height = 768
         print(f"  [SDXL] resolution → {width}x{height}")
 
-    q_settings = {
-        "Nhanh (20 steps)":   {"steps": 20, "cfg": 7.0, "sampler": "euler",          "scheduler": "normal"},
-        "Cân bằng (28 steps)":{"steps": 28, "cfg": 7.5, "sampler": "dpm_2",          "scheduler": "karras"},
-        "Cao (35 steps)":     {"steps": 35, "cfg": 8.0, "sampler": "dpm_2_ancestral","scheduler": "karras"},
-        "Tốt nhất (50 steps)":{"steps": 50, "cfg": 8.5, "sampler": "dpm_2_ancestral","scheduler": "karras"},
-    }.get(quality, {"steps": 28, "cfg": 7.5, "sampler": "euler", "scheduler": "normal"})
+    quality = normalize_quality(quality)
+    upscale = normalize_upscale(upscale)
+    q_settings = QUALITY_PRESETS[quality]
 
     wf = {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
@@ -305,7 +425,7 @@ def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscal
     }}
     wf["6"] = {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}}
 
-    if upscale == "2x (ESRGAN)":
+    if upscale == UPSCALE_ESRGAN_2X:
         up_models = get_upscale_models()
         if up_models:
             up_m = next((m for m in up_models if "anime" in m.lower()), up_models[0])
@@ -315,7 +435,7 @@ def build_quality_workflow(model, full_prompt, neg_prompt, seed, quality, upscal
         else:
             print("⚠️ Chưa có ESRGAN model, bỏ qua upscale")
             wf["10"] = {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "yumeai"}}
-    elif upscale == "1.5x (Latent)":
+    elif upscale == UPSCALE_LATENT_15X:
         wf["7"] = {"class_type": "LatentUpscale", "inputs": {
             "samples": ["5", 0], "upscale_method": "bicubic",
             "width": int(width * 1.5), "height": int(height * 1.5), "crop": "disabled"

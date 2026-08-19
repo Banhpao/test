@@ -12,20 +12,27 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import httpx, json, uuid, asyncio, base64, random
+import httpx, json, asyncio, base64, random, threading
 
-from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, COMFY_TIMEOUT_SEC
-from yumeai.core.personas import PERSONAS
-from yumeai.core.runtime import (
-    guarded_submit_workflow,
-    guarded_poll_and_download,
-    ResourceBusyError,
+from yumeai.core.config import (
+    OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, COMFY_TIMEOUT_SEC, CHAT_TIMEOUT_SEC,
 )
-from yumeai.services.ollama_service import translate_vi_en
+from yumeai.core.personas import PERSONAS
+# Lịch sử chat dùng CHUNG với app_gradio.py — trước đây endpoint này không có
+# lịch sử gì cả nên nhân vật mất trí nhớ sau mỗi câu.
+from yumeai.core.chat_context import build_persona_messages, chat_options
+# Prompt text2img dùng CHUNG với app_gradio.py — hai cửa vào phải cho ra cùng một ảnh
+from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
+from yumeai.core.runtime import run_comfy_job, ResourceBusyError
+from yumeai.services.ollama_service import (
+    translate_vi_en_ex, enrich_for_create_ex, warmup_ollama, check_chat_model,
+)
 from yumeai.services.comfy_service import (
     ComfyUIError,
     get_checkpoint_model,
     build_quality_workflow,
+    QUALITY_BALANCED,
+    UPSCALE_NONE,
 )
 
 app = FastAPI()
@@ -36,14 +43,23 @@ class ChatReq(BaseModel):
     message: str
     persona_id: str = "yuki"
     user_id: str = "user_001"
+    user_name: str = ""   # tên người dùng, để nhân vật gọi đúng
+    # [{"role": "user"|"assistant", "content": "..."}] — client gửi lên các lượt trước.
+    # Server chưa có DB nên trí nhớ vẫn nằm ở client; đây là bước đệm trước khi
+    # có bảng conversation/message thật.
+    history: list = []
 
 
 class ImgReq(BaseModel):
     prompt: str
     persona_id: str = "yuki"
     user_id: str = "user_001"
-    quality: str = "Cân bằng (28 steps)"
-    upscale: str = "Không"
+    style: str = "Anime"          # Anime | Realistic | Semi
+    quality: str = QUALITY_BALANCED
+    upscale: str = UPSCALE_NONE
+    # Mở rộng mô tả ngắn thành prompt chi tiết bằng LLM (giống checkbox
+    # "🧠 Prompt thông minh" bên app_gradio.py).
+    enrich: bool = True
 
 
 # ══════════════════════════════════
@@ -56,6 +72,7 @@ async def root():
         "status": "running",
         "endpoints": {
             "health": "/health",
+            "personas": "/api/personas",
             "chat": "POST /api/chat",
             "image": "POST /api/images/generate",
         },
@@ -64,12 +81,47 @@ async def root():
     }
 
 
+@app.on_event("startup")
+async def _startup():
+    """Nạp sẵn model vào RAM. app_gradio.py đã làm việc này từ lâu còn main.py thì
+    không — nên request đầu tiên qua API rất hay timeout."""
+    warn = check_chat_model()
+    if warn:
+        print(warn)
+    threading.Thread(target=warmup_ollama, daemon=True).start()
+
+
+# ══════════════════════════════════
+# PERSONAS — cho web UI dựng danh sách nhân vật
+# ══════════════════════════════════
+@app.get("/api/personas")
+async def list_personas():
+    return {
+        "personas": [
+            {
+                "id": pid,
+                "name": p.get("name", pid),
+                "age": p.get("age"),
+                "role": p.get("role", ""),
+                "greeting": p.get("greeting", ""),
+                "likes": p.get("likes", []),
+                "appearance": p.get("appearance", ""),
+            }
+            for pid, p in PERSONAS.items()
+        ]
+    }
+
+
 # ══════════════════════════════════
 # HEALTH
 # ══════════════════════════════════
 @app.get("/health")
 async def health():
-    res = {"status": "ok", "ollama": False, "comfyui": False}
+    res = {
+        "status": "ok",
+        "ollama": False,     # BẮT BUỘC: chat, dịch VI→EN, vision
+        "comfyui": False,    # BẮT BUỘC: mọi việc vẽ/sửa ảnh đều chạy ở đây
+    }
     async with httpx.AsyncClient(timeout=3) as c:
         try:
             r = await c.get(f"{OLLAMA_URL}/api/tags")
@@ -93,17 +145,17 @@ async def chat(req: ChatReq):
     if not persona:
         raise HTTPException(404, "Persona không tồn tại")
 
+    messages = build_persona_messages(persona, req.history, req.message,
+                                      user_name=req.user_name)
+
     async def stream():
-        async with httpx.AsyncClient(timeout=120) as c:
+        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as c:
             try:
                 async with c.stream("POST", f"{OLLAMA_URL}/api/chat", json={
                     "model": OLLAMA_MODEL,
-                    "messages": [
-                        {"role": "system", "content": persona["system"]},
-                        {"role": "user", "content": req.message},
-                    ],
+                    "messages": messages,
                     "stream": True,
-                    "options": {"temperature": 0.85, "num_predict": 250},
+                    "options": chat_options(),
                 }) as resp:
                     async for line in resp.aiter_lines():
                         if not line:
@@ -137,21 +189,31 @@ async def gen_image(req: ImgReq):
     if not persona:
         raise HTTPException(404, "Persona không tồn tại")
 
-    # Bước 1: Dịch tiếng Việt → EN (dùng chung ollama_service, không tự viết lại)
-    en_tags = await asyncio.to_thread(translate_vi_en, req.prompt)
+    # Bước 1: Dịch tiếng Việt → EN (dùng chung ollama_service, không tự viết lại).
+    # translate_ok=False nghĩa là Ollama không phản hồi và en_tags VẪN LÀ tiếng Việt —
+    # Stable Diffusion không hiểu tiếng Việt nên ảnh sẽ rác. Phải báo cho client biết,
+    # bản cũ nuốt lỗi im lặng.
+    if req.enrich:
+        en_tags, translate_ok = await asyncio.to_thread(enrich_for_create_ex, req.prompt, req.style)
+    else:
+        en_tags, translate_ok = await asyncio.to_thread(translate_vi_en_ex, req.prompt)
 
-    # Bước 2: Lấy model checkpoint hợp lệ (loại SDXL/LoRA/inpaint — máy 4GB VRAM)
-    model_name = await asyncio.to_thread(get_checkpoint_model, "Anime")
+    # Bước 2: Lấy model checkpoint hợp lệ (loại SDXL/LoRA/inpaint — máy 4GB VRAM).
+    # get_checkpoint_model nay ném ComfyUIError kèm hướng dẫn cụ thể khi ComfyUI chưa
+    # bật, thay vì trả "" rồi báo "Không tìm thấy model checkpoint" gây hiểu nhầm.
+    try:
+        model_name = await asyncio.to_thread(get_checkpoint_model, req.style)
+    except ComfyUIError as e:
+        raise HTTPException(502, str(e))
     if not model_name:
-        raise HTTPException(500, "Không tìm thấy model checkpoint")
+        raise HTTPException(502, "ComfyUI không trả về checkpoint nào dùng được.")
 
     # Bước 3: Build prompt + workflow (dùng chung comfy_service, có quality/upscale preset)
-    full_prompt = f"{persona['appearance']}, {en_tags}, masterpiece, best quality, highly detailed"
-    neg_prompt = "worst quality, low quality, blurry, deformed, ugly, watermark, text, bad anatomy, extra fingers, mutated hands"
+    full_prompt = build_positive_prompt(en_tags, req.style, persona["appearance"])
     seed = random.randint(1, 2**31)
 
     workflow = build_quality_workflow(
-        model_name, full_prompt, neg_prompt, seed,
+        model_name, full_prompt, NEGATIVE_PROMPT, seed,
         quality=req.quality, upscale=req.upscale,
     )
 
@@ -161,8 +223,9 @@ async def gen_image(req: ImgReq):
     # 1 tiến trình Python. Nếu chạy 2 tiến trình `python` riêng biệt cùng lúc,
     # hãy tự đảm bảo không bấm tạo ảnh ở cả hai nơi cùng lúc.
     try:
-        prompt_id = await asyncio.to_thread(guarded_submit_workflow, workflow)
-        img = await asyncio.to_thread(guarded_poll_and_download, prompt_id, None, 0.0, COMFY_TIMEOUT_SEC)
+        # run_comfy_job giữ slot trong MỘT khối: submit và poll không còn tách đôi
+        # ở hai hàm khác nhau nữa (xem comfy_job() trong yumeai/core/runtime.py).
+        img = await asyncio.to_thread(run_comfy_job, workflow, None, 0.0, COMFY_TIMEOUT_SEC)
     except ResourceBusyError as e:
         raise HTTPException(429, str(e))
     except ComfyUIError as e:
@@ -180,7 +243,13 @@ async def gen_image(req: ImgReq):
         "translated_prompt": en_tags,
         "original_prompt": req.prompt,
         "model_used": model_name,
+        "style": req.style,
         "seed": seed,
+        "translation_ok": translate_ok,
+        "warning": None if translate_ok else (
+            "Không dịch được sang tiếng Anh (Ollama không phản hồi). Prompt tiếng Việt "
+            "đã đi thẳng vào Stable Diffusion nên ảnh có thể sai hoặc rác."
+        ),
     }
 
 
