@@ -10,6 +10,12 @@
 > - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — lệnh khởi động, xử lý sự cố
 > - [`docs/TESTLOG.md`](docs/TESTLOG.md) — kết quả chạy thử trên các máy khác nhau
 
+> **Dự án anh em:** `../yume_assistant` — **Yume Assistant**, trợ lý kỹ thuật cá
+> nhân (RAG, tool calling, sau này ROS2/MQTT). Đó là **sản phẩm khác**, repo khác.
+> Hai bên dùng chung vài ý tưởng kỹ thuật (personality system, context manager,
+> Ollama client) nhưng personality mâu thuẫn trực tiếp — companion không bao giờ
+> nhận mình là AI, assistant phải nói thẳng khi không chắc. **Đừng gộp hai dự án.**
+
 ---
 
 ## 1. Dự án này là gì

@@ -10,6 +10,12 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-08-20
+
+- Tách dự án Yume Assistant (trợ lý kỹ thuật, RAG + tool + ROS2 sau này) sang repo riêng ../yume_assistant, copy 3 module lõi. Xem AGENTS.md của repo đó.
+
+---
+
 ## 2026-08-18
 
 - Thêm bộ nhớ dự án: AGENTS.md, CLAUDE.md, docs/ (STATE, DECISIONS, CHANGELOG, RUNBOOK) và devlog.py
