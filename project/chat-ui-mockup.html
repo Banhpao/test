@@ -123,6 +123,22 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
 .qbtns{display:flex;flex-direction:column;gap:5px}
 .qbtn{display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:7px 10px;color:var(--muted);font-size:12px;font-family:inherit;cursor:pointer;width:100%;text-align:left}
 .qbtn:hover{background:var(--accent-bg);color:var(--accent)}
+.memory-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.memory-head .plbl{margin-bottom:0}
+.memory-tools{display:flex;gap:4px}
+.memory-tool{width:25px;height:25px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer}
+.memory-tool:hover{color:var(--accent);border-color:rgba(192,132,252,.35)}
+.memory-list{display:flex;flex-direction:column;gap:6px}
+.memory-empty{font-size:11px;line-height:1.5;color:var(--muted)}
+.memory-item{display:flex;gap:6px;align-items:flex-start;padding:7px 8px;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
+.memory-copy{flex:1;min-width:0}
+.memory-key{font-size:9px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;overflow:hidden;text-overflow:ellipsis}
+.memory-value{font-size:11px;color:var(--text);line-height:1.4;margin-top:2px;word-break:break-word}
+.memory-actions{display:flex;gap:2px}
+.memory-action{border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:1px 3px}
+.memory-action:hover{color:var(--accent)}
+.memory-action.delete:hover{color:#f87171}
+.memory-note{font-size:9px;color:var(--muted);line-height:1.4;margin-top:8px}
 .lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:300;align-items:center;justify-content:center}
 .lightbox.show{display:flex}
 .lightbox img{max-width:90%;max-height:90vh;border-radius:var(--r)}
@@ -143,54 +159,31 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
     <div class="logo">yumeai</div>
     <div class="search-box">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input type="text" placeholder="Tìm nhân vật..." autocomplete="off">
+      <input type="text" placeholder="Tìm hội thoại..." autocomplete="off"
+        oninput="UI.filterConversations(this.value)">
     </div>
   </div>
-  <div class="slabel">Đang chat</div>
-  <div class="conv-list">
-    <div class="conv-item active">
-      <div class="cav">🌸</div>
-      <div class="cinfo"><div class="cname">Yuki</div><div class="clast">Baka!</div></div>
-      <div class="cmeta"><div class="ctime">2ph</div><div class="cbadge">3</div></div>
-    </div>
-    <div class="conv-item">
-      <div class="cav">🌙</div>
-      <div class="cinfo"><div class="cname">Hana</div><div class="clast">Hôm nay sao?</div></div>
-      <div class="cmeta"><div class="ctime">1 giờ</div></div>
-    </div>
-  </div>
+  <div class="slabel">Hội thoại đã lưu</div>
+  <div class="conv-list" id="conv-list"></div>
   <div class="sfooter">
     <div class="uav">M</div>
-    <div class="uinfo"><div class="uname">Minh</div><div class="uplan">✦ PRO</div></div>
-    <div class="credit-chip">⭐ <span id="cr">99</span></div>
+    <div class="uinfo"><div class="uname">Minh</div><div class="uplan">● LOCAL</div></div>
   </div>
 </div>
 
 <div class="chat-main">
   <div class="chat-header">
     <div class="char-av-wrap">
-      <div class="char-av">🌸</div>
+      <div class="char-av" id="header-avatar">🌸</div>
       <div class="ondot"></div>
     </div>
     <div class="char-info">
-      <div class="char-name-row">Yuki <span class="mood-tag">tsundere</span></div>
-      <div class="char-sub">
-        <div class="aff-mini"><div class="aff-mini-fill" id="aff-bar" style="width:62%"></div></div>
-        <span id="aff-num">62</span> · Sinh viên · Tokyo
-      </div>
+      <div class="char-name-row"><span id="header-name">Yuki</span> <span class="mood-tag">AI character</span></div>
+      <div class="char-sub" id="header-role">Đang tải hồ sơ...</div>
     </div>
   </div>
 
-  <div class="messages" id="messages">
-    <div class="datesep">Hôm nay</div>
-    <div class="mrow">
-      <div class="mav char">🌸</div>
-      <div class="mbody">
-        <div class="bubble char">Ừ thì... mày lại vào rồi. Tao không chờ mày đâu nhé.</div>
-        <div class="mtime">14:02</div>
-      </div>
-    </div>
-  </div>
+  <div class="messages" id="messages"><div class="datesep">Hôm nay</div></div>
 
   <div class="suggests">
     <button class="sug-btn" onclick="UI.qs(this.textContent)">🎨 Hỏi về tranh</button>
@@ -215,7 +208,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
   <div class="chat-input-area">
     <div class="input-wrap">
       <textarea class="chat-inp" id="chat-inp" rows="1"
-        placeholder="Nhắn với Yuki..."
+        placeholder="Nhắn với nhân vật..."
         autocomplete="off" autocorrect="off" spellcheck="false"
         onkeydown="UI.handleKey(event)" oninput="UI.resize(this)"></textarea>
       <button class="send-btn" id="send-btn" onclick="UI.send()">
@@ -235,32 +228,29 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
   <div class="psec">
     <div class="plbl">Nhân vật</div>
     <div class="char-profile">
-      <div class="big-av">🌸</div>
-      <div class="cpname">Yuki</div>
-      <div class="cpsub">22 tuổi · Tokyo</div>
-      <div class="traits">
-        <span class="trait">tsundere</span><span class="trait">caring</span>
-        <span class="trait">artistic</span><span class="trait">shy</span>
-      </div>
+      <div class="big-av" id="profile-avatar">🌸</div>
+      <div class="cpname" id="profile-name">Yuki</div>
+      <div class="cpsub" id="profile-role">Đang tải...</div>
+      <div class="traits" id="profile-traits"></div>
     </div>
   </div>
   <div class="psec">
-    <div class="plbl">Chỉ số quan hệ</div>
-    <div class="srows">
-      <div class="srow">
-        <div class="slrow"><span>Affection</span><span id="aff-val">62 / 100</span></div>
-        <div class="strk"><div class="sf fa" id="aff-fill" style="width:62%"></div></div>
-      </div>
-      <div class="srow">
-        <div class="slrow"><span>Stage</span><span style="color:var(--teal)">Close Friend</span></div>
-        <div class="strk"><div class="sf ft" style="width:60%"></div></div>
+    <div class="memory-head">
+      <div class="plbl">Trí nhớ đã lưu</div>
+      <div class="memory-tools">
+        <button class="memory-tool" title="Thêm trí nhớ" onclick="UI.addMemory()">＋</button>
+        <button class="memory-tool" title="Làm mới" onclick="UI._loadMemory()">↻</button>
       </div>
     </div>
+    <div class="memory-list" id="memory-list">
+      <div class="memory-empty">Chưa tải trí nhớ.</div>
+    </div>
+    <div class="memory-note" id="memory-note">Bạn có thể sửa hoặc xoá điều nhân vật nhớ sai.</div>
   </div>
   <div class="psec">
     <div class="plbl">Gợi ý nhanh</div>
     <div class="qbtns">
-      <button class="qbtn" onclick="UI.qs('Yuki hôm nay vẽ gì?')">🎨 Hỏi về tranh</button>
+      <button class="qbtn" onclick="UI.qs('Hôm nay em làm gì?')">🎨 Hỏi về hôm nay</button>
       <button class="qbtn" onclick="UI.qs('Kể về Tokyo đi')">🗼 Hỏi về Tokyo</button>
       <button class="qbtn" onclick="UI.qs('Mày thích nhạc gì?')">🎵 Hỏi về nhạc</button>
     </div>
@@ -272,37 +262,47 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
 // CONFIG & STATE
 // ════════════════════════════════════════
 const CFG = {
-  API:     'http://localhost:8000',
-  PERSONA: 'yuki',
-  USER:    'user_001'
+  API:       location.protocol.startsWith('http') ? location.origin : 'http://localhost:8000',
+  USER:      'user_001',
+  USER_NAME: 'Minh'
 }
 
 const STATE = {
   busy: false,
-  aff: 62,
-  credits: 99,
-  online: false
+  online: false,
+  comfy: false,
+  conversationId: localStorage.getItem('yumeai_conversation_id'),
+  personaId: 'yuki',
+  personas: [],
+  conversations: []
 }
 
-const MOCKS = [
-  "H-hừ... Câu hỏi vô duyên. Tao trả lời vì tao muốn thôi nhé.",
-  "Baka! Tự nhiên hỏi cái đó làm gì. Thôi được, nghe này.",
-  "...Ừ thì. Mày đừng vui quá vì tao đồng ý đấy.",
-  "Tokyo mùa này đẹp lắm. M-mày muốn đến xem không? Tao chỉ hỏi thôi!",
-]
+const ICONS = { yuki: '🌸', hana: '🌙' }
 
 // ════════════════════════════════════════
 // UI NAMESPACE — tất cả hàm public ở đây
 // ════════════════════════════════════════
 const UI = {
+  async init() {
+    await UI.checkHealth()
+    try {
+      await UI._loadPersonas()
+      await UI._loadConversations()
+    } catch (err) {
+      UI._addErr('Không tải được dữ liệu: ' + err.message)
+    }
+  },
+
   // ── Health check ────────────────
   async checkHealth() {
+    const el = document.getElementById('api-status')
+    el.style.opacity = '1'
     try {
       const r = await fetch(`${CFG.API}/health`, { signal: AbortSignal.timeout(3000) })
       const d = await r.json()
       STATE.online = d.ollama === true
+      STATE.comfy = d.comfyui === true
 
-      const el = document.getElementById('api-status')
       if (d.ollama && d.comfyui) {
         el.className = 'ok'
         el.textContent = '🟢 Local AI sẵn sàng'
@@ -311,14 +311,254 @@ const UI = {
         el.textContent = '🟡 Ollama OK · ComfyUI chưa chạy'
       } else {
         el.className = 'bad'
-        el.textContent = '⚠️ Python chưa kết nối'
+        el.textContent = '⚠️ Ollama chưa chạy'
       }
-      setTimeout(() => { el.style.opacity = '0' }, 4000)
-    } catch {
+    } catch (err) {
       STATE.online = false
-      const el = document.getElementById('api-status')
+      STATE.comfy = false
       el.className = 'bad'
       el.textContent = '⚠️ Backend chưa chạy'
+    }
+  },
+
+  async _loadPersonas() {
+    const r = await fetch(`${CFG.API}/api/personas`)
+    if (!r.ok) throw new Error('Không đọc được danh sách nhân vật')
+    STATE.personas = (await r.json()).personas || []
+  },
+
+  async _loadConversations() {
+    await UI._fetchConversations()
+    // Lần chạy đầu: tạo một hội thoại cho mỗi persona dựng sẵn để sidebar có
+    // điểm vào thật, thay cho hai item mock trước đây.
+    if (!STATE.conversations.length) {
+      for (const persona of STATE.personas) {
+        const r = await fetch(`${CFG.API}/api/conversations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: CFG.USER,
+            user_name: CFG.USER_NAME,
+            persona_id: persona.id
+          })
+        })
+        if (!r.ok) throw new Error(`Không tạo được hội thoại với ${persona.name}`)
+      }
+      await UI._fetchConversations()
+    }
+
+    const selected = STATE.conversations.find(c => c.id === STATE.conversationId)
+      || STATE.conversations[0]
+    if (selected) await UI.openConversation(selected.id)
+  },
+
+  async _fetchConversations() {
+    const r = await fetch(`${CFG.API}/api/conversations?user_id=${encodeURIComponent(CFG.USER)}`)
+    if (!r.ok) throw new Error('Không đọc được lịch sử hội thoại')
+    STATE.conversations = (await r.json()).conversations || []
+    UI._renderConversations()
+  },
+
+  _renderConversations() {
+    const list = document.getElementById('conv-list')
+    list.replaceChildren()
+    for (const conv of STATE.conversations) {
+      const item = document.createElement('div')
+      item.className = 'conv-item' + (conv.id === STATE.conversationId ? ' active' : '')
+      item.onclick = () => UI.openConversation(conv.id)
+
+      const avatar = document.createElement('div')
+      avatar.className = 'cav'
+      avatar.textContent = ICONS[conv.character_id] || '✦'
+
+      const info = document.createElement('div')
+      info.className = 'cinfo'
+      const name = document.createElement('div')
+      name.className = 'cname'
+      name.textContent = conv.character_name
+      const last = document.createElement('div')
+      last.className = 'clast'
+      last.textContent = UI._lastMessageLabel(conv.last_message)
+      info.append(name, last)
+
+      const meta = document.createElement('div')
+      meta.className = 'cmeta'
+      const time = document.createElement('div')
+      time.className = 'ctime'
+      time.textContent = UI._shortDate(conv.updated_at)
+      meta.appendChild(time)
+      item.append(avatar, info, meta)
+      list.appendChild(item)
+    }
+  },
+
+  filterConversations(query) {
+    const normalized = String(query || '').trim().toLocaleLowerCase('vi-VN')
+    for (const item of document.querySelectorAll('.conv-item')) {
+      const text = item.textContent.toLocaleLowerCase('vi-VN')
+      item.style.display = !normalized || text.includes(normalized) ? '' : 'none'
+    }
+  },
+
+  async openConversation(conversationId) {
+    const r = await fetch(
+      `${CFG.API}/api/conversations/${encodeURIComponent(conversationId)}`
+      + `?user_id=${encodeURIComponent(CFG.USER)}`
+    )
+    if (!r.ok) throw new Error('Không mở được hội thoại')
+    const data = await r.json()
+    STATE.conversationId = conversationId
+    STATE.personaId = data.conversation.character_id
+    localStorage.setItem('yumeai_conversation_id', conversationId)
+    UI._renderConversations()
+    UI._renderProfile()
+    UI._renderMessages(data.messages || [])
+    await UI._loadMemory()
+  },
+
+  _renderProfile() {
+    const persona = STATE.personas.find(p => p.id === STATE.personaId) || {}
+    const icon = ICONS[STATE.personaId] || '✦'
+    document.getElementById('header-avatar').textContent = icon
+    document.getElementById('header-name').textContent = persona.name || STATE.personaId
+    document.getElementById('header-role').textContent = persona.role || ''
+    document.getElementById('profile-avatar').textContent = icon
+    document.getElementById('profile-name').textContent = persona.name || STATE.personaId
+    document.getElementById('profile-role').textContent = `${persona.age || '?'} tuổi · ${persona.role || ''}`
+    document.getElementById('chat-inp').placeholder = `Nhắn với ${persona.name || 'nhân vật'}...`
+
+    const traits = document.getElementById('profile-traits')
+    traits.replaceChildren()
+    for (const like of (persona.likes || []).slice(0, 4)) {
+      const tag = document.createElement('span')
+      tag.className = 'trait'
+      tag.textContent = like
+      traits.appendChild(tag)
+    }
+  },
+
+  _renderMessages(messages) {
+    const box = document.getElementById('messages')
+    box.replaceChildren()
+    const date = document.createElement('div')
+    date.className = 'datesep'
+    date.textContent = 'Hội thoại đã lưu'
+    box.appendChild(date)
+    for (const msg of messages) {
+      if (msg.content_type === 'image') {
+        try {
+          const data = JSON.parse(msg.content)
+          UI._addImage(UI._absoluteUrl(data.image_url), data.prompt || 'Ảnh đã tạo', msg.created_at)
+        } catch (err) {
+          UI._addErr('Một ảnh cũ có metadata không hợp lệ')
+        }
+      } else {
+        UI._addMsg(msg.role === 'user' ? 'user' : 'ai', msg.content, msg.created_at)
+      }
+    }
+    UI._scroll()
+  },
+
+  async _loadMemory() {
+    const list = document.getElementById('memory-list')
+    try {
+      const url = `${CFG.API}/api/memory?user_id=${encodeURIComponent(CFG.USER)}`
+        + `&persona_id=${encodeURIComponent(STATE.personaId)}`
+      const r = await fetch(url)
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      const data = await r.json()
+      UI._renderMemory(data.facts || [])
+      document.getElementById('memory-note').textContent = data.auto_extraction
+        ? `Tự cập nhật mỗi ${data.extraction_every_messages} tin nhắn · có thể sửa/xoá`
+        : 'Tự trích xuất đang tắt · bạn vẫn có thể thêm thủ công'
+    } catch (err) {
+      list.replaceChildren()
+      const empty = document.createElement('div')
+      empty.className = 'memory-empty'
+      empty.textContent = 'Không tải được trí nhớ: ' + err.message
+      list.appendChild(empty)
+    }
+  },
+
+  _renderMemory(facts) {
+    const list = document.getElementById('memory-list')
+    list.replaceChildren()
+    if (!facts.length) {
+      const empty = document.createElement('div')
+      empty.className = 'memory-empty'
+      empty.textContent = 'Chưa có fact nào. Chat thêm hoặc bấm ＋ để thêm.'
+      list.appendChild(empty)
+      return
+    }
+    for (const fact of facts) {
+      const item = document.createElement('div')
+      item.className = 'memory-item'
+      const copy = document.createElement('div')
+      copy.className = 'memory-copy'
+      const key = document.createElement('div')
+      key.className = 'memory-key'
+      key.textContent = fact.fact_key.replaceAll('_', ' ')
+      const value = document.createElement('div')
+      value.className = 'memory-value'
+      value.textContent = fact.fact_value
+      copy.append(key, value)
+
+      const actions = document.createElement('div')
+      actions.className = 'memory-actions'
+      const edit = document.createElement('button')
+      edit.className = 'memory-action'
+      edit.title = 'Sửa'
+      edit.textContent = '✎'
+      edit.onclick = () => UI.editMemory(fact.fact_key, fact.fact_value)
+      const remove = document.createElement('button')
+      remove.className = 'memory-action delete'
+      remove.title = 'Xoá'
+      remove.textContent = '×'
+      remove.onclick = () => UI.deleteMemory(fact.fact_key)
+      actions.append(edit, remove)
+      item.append(copy, actions)
+      list.appendChild(item)
+    }
+  },
+
+  async addMemory() {
+    const key = prompt('Tên ngắn cho trí nhớ (ví dụ: favorite_drink):')
+    if (!key || !key.trim()) return
+    await UI.editMemory(key.trim(), '')
+  },
+
+  async editMemory(key, oldValue) {
+    const value = prompt('Nhân vật nên nhớ điều gì?', oldValue || '')
+    if (value === null || !value.trim()) return
+    try {
+      const r = await fetch(`${CFG.API}/api/memory/${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: CFG.USER,
+          persona_id: STATE.personaId,
+          value: value.trim(),
+          confidence: 1
+        })
+      })
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      await UI._loadMemory()
+    } catch (err) {
+      UI._addErr('Không lưu được trí nhớ: ' + err.message)
+    }
+  },
+
+  async deleteMemory(key) {
+    if (!confirm(`Xoá trí nhớ “${key.replaceAll('_', ' ')}”?`)) return
+    try {
+      const url = `${CFG.API}/api/memory/${encodeURIComponent(key)}`
+        + `?user_id=${encodeURIComponent(CFG.USER)}`
+        + `&persona_id=${encodeURIComponent(STATE.personaId)}`
+      const r = await fetch(url, { method: 'DELETE' })
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      await UI._loadMemory()
+    } catch (err) {
+      UI._addErr('Không xoá được trí nhớ: ' + err.message)
     }
   },
 
@@ -328,6 +568,14 @@ const UI = {
     const inp = document.getElementById('chat-inp')
     const txt = inp.value.trim()
     if (!txt) return
+    if (!STATE.online) {
+      UI._addErr('Ollama chưa sẵn sàng. Hãy chạy ollama serve rồi thử lại.')
+      return
+    }
+    if (!STATE.conversationId) {
+      UI._addErr('Chưa có cuộc hội thoại được chọn.')
+      return
+    }
 
     inp.value = ''
     inp.style.height = 'auto'
@@ -338,45 +586,45 @@ const UI = {
     UI._showTyping()
 
     try {
-      if (STATE.online) {
-        const res = await fetch(`${CFG.API}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: txt, persona_id: CFG.PERSONA, user_id: CFG.USER })
+      const res = await fetch(`${CFG.API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: txt,
+          persona_id: STATE.personaId,
+          user_id: CFG.USER,
+          user_name: CFG.USER_NAME,
+          conversation_id: STATE.conversationId
         })
-        if (!res.ok) throw new Error('HTTP ' + res.status)
+      })
+      if (!res.ok) throw new Error('HTTP ' + res.status)
 
-        UI._removeTyping()
-        const row = UI._addMsg('ai', '')
-        const bbl = row.querySelector('.stream-bbl')
-
-        const reader = res.body.getReader()
-        const dec = new TextDecoder()
-        let full = ''
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          const chunk = dec.decode(value)
-          for (const line of chunk.split('\n')) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-              full += line.slice(6)
-              bbl.textContent = full
-              UI._scroll()
-            }
+      UI._removeTyping()
+      const row = UI._addMsg('ai', '')
+      const bbl = row.querySelector('.stream-bbl')
+      const reader = res.body.getReader()
+      const dec = new TextDecoder()
+      let full = ''
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        buffer += dec.decode(value || new Uint8Array(), { stream: !done })
+        const events = buffer.split(/\r?\n\r?\n/)
+        buffer = events.pop() || ''
+        for (const event of events) {
+          const line = event.split(/\r?\n/).find(x => x.startsWith('data: '))
+          if (!line) continue
+          const payload = JSON.parse(line.slice(6))
+          if (payload.error) throw new Error(payload.error)
+          if (payload.token) {
+            full += payload.token
+            bbl.textContent = full
+            UI._scroll()
           }
         }
-      } else {
-        await UI._delay(700)
-        UI._removeTyping()
-        const resp = MOCKS[Math.floor(Math.random() * MOCKS.length)]
-        const row = UI._addMsg('ai', '')
-        await UI._typewriter(row.querySelector('.stream-bbl'), resp)
+        if (done) break
       }
-
-      if (Math.random() > 0.5) {
-        STATE.aff = Math.min(100, STATE.aff + Math.floor(Math.random() * 3) + 1)
-        UI._updateAff()
-      }
+      await UI._fetchConversations()
     } catch (err) {
       UI._removeTyping()
       UI._addErr('Lỗi chat: ' + err.message)
@@ -391,6 +639,10 @@ const UI = {
     const inp = document.getElementById('img-inp')
     const prompt = inp.value.trim()
     if (!prompt) { inp.focus(); return }
+    if (!STATE.comfy) {
+      UI._addErr('ComfyUI chưa sẵn sàng. Hãy khởi động ComfyUI rồi thử lại.')
+      return
+    }
 
     const overlay = document.getElementById('gen-overlay')
     const btn     = document.getElementById('gen-btn')
@@ -402,47 +654,39 @@ const UI = {
 
     try {
       let imgSrc
-
-      if (STATE.online) {
-        lbl.textContent = 'ComfyUI đang vẽ... (~30 giây)'
-        const res = await fetch(`${CFG.API}/api/images/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, persona_id: CFG.PERSONA, user_id: CFG.USER })
+      lbl.textContent = 'ComfyUI đang vẽ... có thể mất vài phút'
+      const res = await fetch(`${CFG.API}/api/images/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          persona_id: STATE.personaId,
+          user_id: CFG.USER,
+          conversation_id: STATE.conversationId,
+          include_base64: false
         })
+      })
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}))
-          throw new Error(errData.detail || `HTTP ${res.status}`)
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.detail || `HTTP ${res.status}`)
+      }
 
-        const data = await res.json()
-        console.log('Image response:', data)  // debug
-
-        // Backend trả về image_base64
-        if (data.image_base64) {
-          imgSrc = `data:image/png;base64,${data.image_base64}`
-        } else if (data.image_url) {
-          imgSrc = data.image_url
-        } else {
-          throw new Error('Không có ảnh trong response')
-        }
-
-        STATE.credits = data.credits_remaining ?? (STATE.credits - 1)
+      const data = await res.json()
+      if (data.image_url) {
+        imgSrc = UI._absoluteUrl(data.image_url)
+      } else if (data.image_base64) {
+        imgSrc = `data:image/png;base64,${data.image_base64}`
       } else {
-        lbl.textContent = 'Mock mode...'
-        await UI._delay(2000)
-        const seed = Math.floor(Math.random() * 9000) + 1000
-        imgSrc = `https://picsum.photos/seed/${seed}/300/400`
-        STATE.credits = Math.max(0, STATE.credits - 1)
+        throw new Error('Không có ảnh trong response')
       }
 
       overlay.classList.remove('show')
       lbl.textContent = 'Đang tạo ảnh...'
-      document.getElementById('cr').textContent = STATE.credits
 
       UI._addImage(imgSrc, prompt)
       inp.value = ''
+      await UI._fetchConversations()
     } catch (err) {
       overlay.classList.remove('show')
       lbl.textContent = 'Đang tạo ảnh...'
@@ -478,9 +722,9 @@ const UI = {
   },
 
   // ── Private helpers ────────────
-  _addMsg(role, txt) {
+  _addMsg(role, txt, createdAt = null) {
     const msgs = document.getElementById('messages')
-    const t    = UI._now()
+    const t    = UI._messageTime(createdAt)
     const row  = document.createElement('div')
     row.className = 'mrow' + (role === 'user' ? ' user' : '')
 
@@ -494,18 +738,19 @@ const UI = {
       row.querySelector('.bubble').textContent = txt
     } else {
       row.innerHTML = `
-        <div class="mav char">🌸</div>
+        <div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
         <div class="mbody">
           <div class="bubble char stream-bbl"></div>
           <div class="mtime">${t}</div>
         </div>`
+      row.querySelector('.bubble').textContent = txt
     }
     msgs.appendChild(row)
     UI._scroll()
     return row
   },
 
-  _addImage(src, prompt) {
+  _addImage(src, prompt, createdAt = null) {
     const msgs = document.getElementById('messages')
     const row  = document.createElement('div')
     row.className = 'mrow'
@@ -513,14 +758,14 @@ const UI = {
     const safePrompt = String(prompt).replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
     row.innerHTML = `
-      <div class="mav char">🌸</div>
+      <div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
       <div class="mbody">
-        <div class="bubble char">Đây... tao đã tạo rồi đó. Hài lòng chưa?</div>
+        <div class="bubble char">Đây là ảnh đã tạo theo yêu cầu.</div>
         <div class="bimg">
           <img alt="Generated" style="background:var(--surface);min-height:200px">
           <div class="icap">✨ ${safePrompt}</div>
         </div>
-        <div class="mtime">${UI._now()}</div>
+        <div class="mtime">${UI._messageTime(createdAt)}</div>
       </div>`
 
     const img = row.querySelector('img')
@@ -539,7 +784,7 @@ const UI = {
     const msgs = document.getElementById('messages')
     const row  = document.createElement('div')
     row.className = 'mrow'; row.id = 'trow'
-    row.innerHTML = `<div class="mav char">🌸</div>
+    row.innerHTML = `<div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
       <div class="mbody"><div class="bubble typing">
         <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
       </div></div>`
@@ -552,14 +797,6 @@ const UI = {
     if (el) el.remove()
   },
 
-  async _typewriter(el, txt) {
-    for (let i = 0; i < txt.length; i++) {
-      el.textContent += txt[i]
-      await UI._delay(16 + Math.random() * 18)
-      UI._scroll()
-    }
-  },
-
   _addErr(msg) {
     const msgs = document.getElementById('messages')
     const d    = document.createElement('div')
@@ -567,13 +804,6 @@ const UI = {
     d.textContent = '⚠️ ' + msg
     msgs.appendChild(d)
     UI._scroll()
-  },
-
-  _updateAff() {
-    document.getElementById('aff-fill').style.width = STATE.aff + '%'
-    document.getElementById('aff-val').textContent  = STATE.aff + ' / 100'
-    document.getElementById('aff-bar').style.width  = STATE.aff + '%'
-    document.getElementById('aff-num').textContent  = STATE.aff
   },
 
   _scroll() {
@@ -585,6 +815,35 @@ const UI = {
     return new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
   },
 
+  _messageTime(value) {
+    if (!value) return UI._now()
+    return new Date(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+  },
+
+  _shortDate(value) {
+    if (!value) return ''
+    const date = new Date(value)
+    const today = new Date()
+    if (date.toDateString() === today.toDateString()) {
+      return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+    }
+    return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
+  },
+
+  _lastMessageLabel(value) {
+    if (!value) return 'Chưa có tin nhắn'
+    try {
+      const data = JSON.parse(value)
+      if (data.image_id) return `Ảnh: ${data.prompt || 'đã tạo'}`
+    } catch (err) {}
+    return value
+  },
+
+  _absoluteUrl(value) {
+    if (!value || /^https?:\/\//.test(value) || value.startsWith('data:')) return value
+    return `${CFG.API}${value.startsWith('/') ? '' : '/'}${value}`
+  },
+
   _delay(ms) {
     return new Promise(r => setTimeout(r, ms))
   }
@@ -593,7 +852,7 @@ const UI = {
 // ════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════
-UI.checkHealth()
+UI.init()
 setInterval(() => UI.checkHealth(), 30000)
 </script>
 </body>

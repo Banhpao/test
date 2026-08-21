@@ -208,3 +208,133 @@ nào — vì bộ nhớ đó không mang theo được sang công cụ khác.
 
 **Hệ quả.** Ai (hoặc AI) nào cũng phải cập nhật tài liệu khi thay đổi. Xem mục 8
 trong `AGENTS.md`.
+
+---
+
+## D11 — SQLite là nguồn dữ liệu sản phẩm; hoãn framework memory nặng
+**Ngày:** 2026-08-21 · **Trạng thái:** đã chốt · **Thay thế nợ D8**
+
+**Bối cảnh.** Chat/persona đã chạy nhưng history nằm ở client/Gradio State, ảnh
+REST chỉ trả base64 và UI dùng conversation/credit/affection giả. Đóng app là mất
+toàn bộ trạng thái sản phẩm. Có cân nhắc ghép SillyTavern hoặc Mem0/Qdrant.
+
+**Quyết định.** Dùng SQLite trong thư viện chuẩn làm nguồn dữ liệu local duy nhất.
+Schema v1 có `users`, `characters`, `conversations`, `messages`, `memory_facts`,
+`images`. Web UI `/app` đi qua FastAPI conversation/gallery API; Gradio tiếp tục
+là cửa debug pipeline ảnh cho tới khi pipeline được tách khỏi framework.
+
+**Vì sao.** Máy chỉ có khoảng 12GB RAM khả dụng và phải chạy Ollama + ComfyUI.
+Một server memory/vector DB riêng làm tăng RAM, vận hành và điểm hỏng trước khi có
+đủ dữ liệu để chứng minh semantic retrieval cần thiết. SQLite cũng dễ backup khi
+di chuyển dự án bằng ổ ngoài.
+
+**Hệ quả.**
+
+- Dữ liệu mặc định ở `project/data/`, được gitignore; đổi ổ bằng
+  `YUMEAI_DATA_DIR`/`YUMEAI_DATABASE_PATH`/`YUMEAI_GENERATED_IMAGES_DIR`.
+- Client gửi `conversation_id`; server tự đọc lịch sử và lưu cả hai phía chat.
+- Ảnh REST lưu PNG + metadata và trả `image_url`, vẫn giữ base64 để tương thích.
+- `user_id` chỉ là phân vùng dữ liệu local, **không phải authentication**. Không
+  được expose Internet trước khi có auth, rate limit và CORS chặt.
+- FTS5/Ollama embeddings chỉ thêm sau khi benchmark. Mem0/Qdrant không bị cấm
+  vĩnh viễn, nhưng phải có số liệu chứng minh SQLite không đủ.
+
+**Sửa kèm.** Cache summary cũ dùng `(persona_name, bucket)`, có thể trả trí nhớ của
+conversation khác có cùng persona/số message. Cache nay thêm fingerprint nội dung.
+
+---
+
+## D12 — Fact memory chạy theo batch sau response, không chạy mỗi message
+**Ngày:** 2026-08-21 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Lưu toàn bộ history giải quyết mất dữ liệu nhưng model nhỏ vẫn cần
+fact ngắn để nhớ xuyên nhiều conversation. Gọi extractor sau mọi lượt sẽ làm máy
+Radeon 680M/~12GB RAM phải sinh hai lần cho mỗi câu và UI có cảm giác chậm gấp đôi.
+
+**Quyết định.** Mặc định gom 12 text message rồi trích một batch tối đa 24 message,
+context 2048 và tối đa 8 fact. Job chạy bằng Starlette background task sau khi SSE
+đã hoàn tất. SQLite giữ con trỏ message đã xử lý; lỗi thì cooldown 5 phút.
+
+**Quyền riêng tư.** Auto extractor bỏ các key về mật khẩu, OTP, API key, tài khoản
+ngân hàng, giấy tờ định danh và vị trí chính xác. UI luôn cho xem, thêm, sửa và xoá
+fact. Fact là phạm vi user–persona để nhân vật nhớ xuyên conversation.
+
+**Đã loại.**
+
+- Chạy extractor mỗi lượt: tốn tài nguyên và tăng latency không cần thiết.
+- Đưa Mem0/Qdrant vào ngay: thêm service/RAM khi số fact còn quá nhỏ.
+- Embedding mọi message: chưa có benchmark chứng minh tốt hơn fact có cấu trúc.
+
+---
+
+## D13 — Khoá cache tóm tắt phải bằng đúng thứ gửi cho LLM
+**Ngày:** 2026-08-21 · **Trạng thái:** đã chốt · **Sửa bug hiệu năng nghiêm trọng**
+
+**Bối cảnh.** `summarize_old_history()` băm TOÀN BỘ `overflow` để làm khoá
+`_SUMMARY_CACHE`. Overflow đổi nội dung mỗi lượt chat, nên khoá đổi mỗi lượt và
+cache **không bao giờ trúng** — trái hẳn ý đồ của `CHAT_SUMMARY_EVERY`.
+
+Tệ hơn: `summarize_conversation()` cắt transcript bằng `[:6000]` — giữ 6000 ký tự
+**đầu**. Đo được: từ khoảng lượt 50 trở đi input gửi vào LLM **giống hệt nhau từng
+byte**. Tức mỗi lượt chat trả giá một lời gọi LLM để tính lại đúng kết quả cũ, rồi
+ném đi. Đo trên 60 lượt: **54 lời gọi**.
+
+Cùng lúc, phần hội thoại **mới nhất không bao giờ lọt vào tóm tắt** — trí nhớ dài
+đóng băng ở đoạn đầu cuộc trò chuyện, im lặng, không lỗi.
+
+Từ 2026-08-21 endpoint `/api/chat` gọi thẳng hàm này mỗi lượt, nên chi phí nằm ngay
+trước token đầu tiên người dùng nhìn thấy.
+
+**Quyết định.**
+
+1. **Khoá cache băm đúng cửa sổ thật sự gửi đi**, không băm dữ liệu mà hàm bên dưới
+   sẽ vứt. Nguyên tắc chung: *khoá cache không được đổi theo phần dữ liệu mà callee
+   loại bỏ.*
+2. Cửa sổ **ổn định trong một lô**: cắt ở ranh giới `bucket * CHAT_SUMMARY_EVERY`.
+   Chưa đủ một lô thì chưa tóm tắt (chậm vài lượt, không mất gì).
+3. Cửa sổ **có cận trên** `CHAT_SUMMARY_MAX_MESSAGES` (mặc định 40) và **trôi theo
+   phần mới**, thay vì phình vô hạn rồi bị cắt mất đuôi.
+4. `summarize_conversation()` cắt từ **đầu** transcript theo ranh giới dòng, giữ
+   phần mới nhất.
+5. **Không cache chuỗi rỗng.** Ollama chết cũng trả `""`; cache lại là khoá cứng
+   "không có trí nhớ" cho tới hết phiên dù dịch vụ đã sống lại.
+6. `main.py` **ghi tóm tắt xuống `conversations.memory_summary`**. Trước đó cột này
+   được đọc nhưng không nơi nào ghi. Bản đã lưu dùng làm lưới đỡ khi Ollama chết
+   hoặc vừa mở lại app — **không ghép** với bản vừa tính, vì hai bản gần trùng nhau,
+   ghép lại là nhét trí nhớ hai lần vào system prompt.
+
+**Kết quả đo.** 60 lượt chat: **54 → 18** lời gọi LLM. Payload: không giới hạn →
+tối đa 40 message.
+
+**Đã loại.** Thêm `user_id` vào khoá cache (giải quyết rò rỉ giữa hai user nhưng
+không giải quyết việc miss mỗi lượt). Bỏ hẳn cache (mỗi lượt một lời gọi LLM trên
+máy CPU là không dùng được).
+
+**Còn nợ.** Cửa sổ trôi nên fact từ đầu hội thoại rơi ra khỏi tóm tắt sau ~40
+message overflow. Đường bền vững là `memory_facts` (D12) — nhưng **chỉ có ở REST**,
+`app_gradio.py` chưa nối DB. Muốn đúng hẳn thì cần tóm tắt cuộn (summary cũ + phần
+mới → summary mới); chưa làm vì cần đổi cả prompt của `summarize_conversation()`.
+
+---
+
+## D14 — Ảnh thuộc về người dùng, không thuộc về hội thoại
+**Ngày:** 2026-08-21 · **Trạng thái:** đã chốt · **Sửa bug mất dữ liệu**
+
+**Bối cảnh.** `list_images()` lọc theo user bằng `JOIN conversations`. Đó là INNER
+JOIN, nên mọi ảnh có `conversation_id IS NULL` bị loại. Mà `/api/gallery` **luôn**
+truyền `user_id`, còn `ImgReq.conversation_id` lại là **tuỳ chọn**.
+
+Hệ quả đo được: sinh ảnh không kèm `conversation_id` → ảnh nằm trong DB và trên đĩa
+nhưng **không đường nào xem lại được**. Với ảnh mất ~400 giây/tấm thì đây là mất
+dữ liệu thật.
+
+**Quyết định.** Schema v3: thêm `images.user_id`, lọc thẳng trên cột đó, bỏ JOIN.
+`record_image()` suy ra chủ từ hội thoại khi không được truyền `user_id`, để ảnh
+không bao giờ rơi vào trạng thái không có chủ.
+
+**Migration.** Backfill từ `conversations`; ảnh mồ côi thì gán cho người dùng duy
+nhất nếu DB chỉ có một. `user_id = ''` (không suy ra được) vẫn cho hiện — bản local
+chưa có đăng nhập, giấu mất ảnh của người dùng tệ hơn.
+
+**Đã loại.** `LEFT JOIN ... OR i.conversation_id IS NULL` — chữa triệu chứng nhưng
+giữ nguyên mô hình sai "ảnh thuộc về hội thoại", và làm ảnh mồ côi hiện với mọi user.

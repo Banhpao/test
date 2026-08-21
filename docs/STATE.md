@@ -1,6 +1,6 @@
 # Trạng thái dự án — YumeAI
 
-**Cập nhật lần cuối:** 2026-08-18 · **Nhánh:** `review-fixes`
+**Cập nhật lần cuối:** 2026-08-21 · **Nhánh:** `review-fixes`
 
 Trả lời đúng ba câu: đang chạy được gì, đang hỏng/thiếu gì, làm gì tiếp.
 Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề lớn.
@@ -10,85 +10,125 @@ Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề l�
 ## ✅ Đang chạy được
 
 **Trò chuyện**
-- Chat streaming với nhân vật, chọn nhân vật bằng dropdown (Yuki / Hana)
-- System prompt đầy đủ (~1810 ký tự) + few-shot 4–5 lượt mẫu → giữ vai tốt
-- Lịch sử 12 lượt gần nhất + trí nhớ dài (nén các lượt cũ thành gạch đầu dòng)
-- Hoạt động giống nhau ở cả Gradio và REST API
+
+- Chat streaming với persona Yuki/Hana, system prompt giàu chi tiết và few-shot.
+- Lịch sử gần + tóm tắt phần cũ. Khoá cache summary băm đúng cửa sổ được gửi cho
+  LLM, ổn định trong một lô `CHAT_SUMMARY_EVERY` và có cận trên
+  `CHAT_SUMMARY_MAX_MESSAGES` (xem D13) — không dùng nhầm summary giữa hai
+  conversation, cũng không gọi LLM lại mỗi lượt.
+- Tóm tắt được ghi xuống `conversations.memory_summary` nên sống qua restart, và
+  làm lưới đỡ khi Ollama chết.
+- REST API lưu user message và assistant reply vào SQLite theo `conversation_id`.
+- Đóng app/mở lại vẫn xem được lịch sử qua `http://127.0.0.1:8000/app`.
+- Client cũ không có `conversation_id` vẫn dùng được trường `history` như trước.
+- Fact extractor chạy nền mỗi 12 text message, tối đa 8 fact/context 2K; fact được
+  dùng chung giữa các conversation của cùng user–persona và ghép vào system prompt.
+- Web UI cho người dùng xem, thêm, sửa, xoá và refresh trí nhớ của nhân vật.
 
 **Ảnh**
-- text2img (SD 1.5) có ngoại hình nhân vật ghép vào prompt
-- "Prompt thông minh" (LLM mở rộng mô tả) — bật/tắt được
-- Giữ mặt/tư thế: ControlNet + IP-Adapter + ReActor
-- Đổi đồ: Flux Kontext, mask+inpaint (SAM), garment transfer theo ảnh mẫu
-- Xoá/thay vật thể bằng inpaint
-- Upscale ESRGAN / Latent
 
-**Hạ tầng**
-- Định tuyến chat / tạo ảnh / sửa ảnh (rule + LLM fallback khi không chắc)
-- Resource Guard: chỉ 1 job ComfyUI cùng lúc, có cả khoá liên tiến trình
-- Degrade có kiểm soát khi thiếu Ollama/ComfyUI, thông báo lỗi có hướng dẫn
-- `test_router.py` — 100+ test chạy offline, hiện **pass toàn bộ**
-- pyflakes sạch trên toàn dự án
+- text2img SD 1.5 có ngoại hình persona, smart prompt, preset quality/upscale.
+- Pipeline Gradio vẫn có ControlNet, IP-Adapter, ReActor, Flux Kontext, SAM
+  mask+inpaint, garment transfer và upscale.
+- Ảnh tạo qua REST được lưu thành PNG cùng prompt, translated prompt, persona,
+  model, style, seed và metadata; mở lại conversation vẫn hiển thị ảnh.
+- `GET /api/gallery` trả gallery theo user/conversation.
+
+**Dữ liệu và UI**
+
+- SQLite schema v2: `users`, `characters`, `conversations`, `messages`,
+  `memory_facts`, `images`; migration v1 giữ nguyên conversation cũ.
+- Web UI đọc sidebar/persona/history từ API thật; không còn mock response, Picsum,
+  credit giả hay affection ngẫu nhiên.
+- Dữ liệu mặc định tại `project/data/`, có thể đổi bằng `YUMEAI_DATA_DIR`.
+
+**Kiểm chứng 2026-08-21**
+
+Chạy được **trên cả máy Linux không có venv** (chỉ cần thư viện chuẩn):
+
+- `python test_storage.py`: **10/10 pass** — gồm migration v1→v2→v3 trên DB có dữ
+  liệu thật, và ca "ảnh không gắn hội thoại vẫn phải nằm trong gallery".
+- `python test_chat_context.py`: **7/7 pass** — đếm số lời gọi LLM tóm tắt bằng
+  module Ollama giả. Cả 7 test này **fail trên code trước D13**, không phải test cho vui.
+
+Cần venv (máy Windows):
+
+- `python test_router.py`: tất cả 100+ check pass.
+- `python test_memory.py`: 3/3 pass, không gọi Ollama thật.
+- `python test_api_storage.py`: 4/4 pass với Ollama giả.
+- Uvicorn smoke: `/app`, `POST /api/conversations`, đọc lại conversation và
+  `/api/gallery` đều HTTP 200.
+
+Chung:
+
+- pyflakes sạch trên `app_gradio.py`, `main.py`, `yumeai/` và toàn bộ test.
+- Kiểu xuống dòng đúng: `main.py` + `prompt_router.py` CRLF, còn lại LF.
+- JavaScript trong `chat-ui-mockup.html` parse thành công.
+
+**Số đo sau D13** (60 lượt chat): lời gọi LLM tóm tắt **54 → 18**; payload gửi vào
+LLM từ không giới hạn → tối đa 40 message.
 
 ---
 
 ## ❌ Chưa có / đang hỏng
 
-### Chặn hướng sản phẩm (ưu tiên cao nhất)
+### Chặn hướng sản phẩm
 
 | Vấn đề | Chi tiết |
 |---|---|
-| **Không có database** | Đóng app là mất sạch hội thoại, trí nhớ, ảnh. Xem D8. |
-| **Không có character consistency thật** | Ngoại hình đã ghép vào prompt, nhưng mỗi lần vẫn ra một người hơi khác. Cần LoRA riêng cho từng nhân vật hoặc IP-Adapter khoá mặt — **iGPU 4GB không train LoRA được**. |
-| **Không có gallery** | Ảnh tạo xong không lưu, không xem lại được. |
-| **Không có user** | Một người dùng ngầm định, không đăng nhập, không phân tách dữ liệu. |
-| **Model chat quá nhỏ** | Mặc định `llama3.2:1b`. Nên đổi `qwen2.5:3b` (máy này ~12GB RAM) hoặc `qwen2.5:7b` nếu RAM rảnh. App có in cảnh báo lúc khởi động. |
+| **Chưa có relevance retrieval** | Fact extraction đã chạy, nhưng hiện đưa tối đa 24 fact gần nhất vào prompt. Chỉ cần FTS5/embedding khi dữ liệu thực tế đủ lớn để benchmark. |
+| **Character consistency chưa đủ** | Appearance tag chưa khoá được đúng một khuôn mặt. Cần ảnh gốc + seed/preset IP-Adapter trước; LoRA cần GPU rời. |
+| **Gradio chưa dùng DB** | Persistence/gallery hiện là đường FastAPI `/app`; Gradio vẫn giữ state trong phiên và là cửa debug pipeline ảnh. |
+| **Chưa có authentication** | Dữ liệu phân tách bằng `user_id`, nhưng đây chưa phải đăng nhập. An toàn khi chỉ bind localhost; không được mở Internet như hiện tại. |
+| **Model chat mặc định quá nhỏ** | `llama3.2:1b` giữ vai kém. Tối thiểu nên dùng model 3B phù hợp RAM sau khi benchmark trên máy thật. |
 
 ### Nợ kỹ thuật đã biết
 
 | Vấn đề | Chi tiết |
 |---|---|
-| `app_gradio.py` là khối 3800 dòng | Pipeline ảnh dính chặt Gradio → `main.py` không tái dùng được. REST API chỉ có chat + text2img. |
-| `requirements.txt` không pin version | Rủi ro thật: file đang mang 3 miếng vá (Fix A/B/C) cho bug Content-Length của Gradio 6.x. |
-| Không có test cho pipeline ảnh | `test_router.py` chỉ phủ router/lịch sử/preset/guard. Phần ảnh chỉ có 1 script thủ công (`test_auto_outfit.py`). |
-| `env.example` khai key không dùng | `ANTHROPIC_API_KEY`, `FAL_KEY` — không code nào đọc. Xem D2. |
-| `ComfyUI/` không trong git | 93GB model + 1.4GB custom_nodes phải copy tay khi chuyển máy. |
+| `app_gradio.py` là khối ~3800 dòng | Pipeline ảnh dính Gradio; REST mới dùng chung chat + text2img, chưa dùng được các edit pipeline nâng cao. |
+| `requirements.txt` chưa pin version | Có rủi ro lệch Gradio/FastAPI giữa hai máy. |
+| Chưa có migration runner | Schema hiện ở v3, migrate bằng cách kiểm `PRAGMA table_info` rồi `ALTER TABLE` — idempotent và đã có test v1→v2→v3, nhưng vẫn chưa phải runner tuần tự thật. |
+| Tóm tắt dùng cửa sổ trôi | Sau ~40 message overflow, fact từ đầu hội thoại rơi khỏi tóm tắt (D13). Đường bền vững là `memory_facts`, nhưng **chỉ có ở REST**. Làm đúng hẳn cần tóm tắt cuộn (summary cũ + phần mới → summary mới). |
+| Chưa test ảnh tự động | Test mới phủ storage/API; ComfyUI workflow vẫn cần service/model thật. |
+| `ComfyUI/` không trong git | 93GB model + custom nodes phải copy/cài riêng khi chuyển máy. |
 
 ---
 
 ## 🎯 Việc tiếp theo, theo thứ tự
 
-### 1. Database + trí nhớ bền vững ← **làm cái này trước**
-SQLite. Bảng: `user`, `character`, `conversation`, `message`, `memory_fact`, `image`.
-Nối vào `build_persona_messages(memory_summary=...)` — chỗ này đã thiết kế sẵn để
-nhận trí nhớ từ ngoài, chỉ cần đọc từ DB thay vì tính lại mỗi phiên.
-**Gần như không đụng GPU → làm được ngay trên máy hiện tại.**
+### 1. Đánh giá chất lượng memory trên hội thoại thật
 
-### 2. Gallery ảnh
-Lưu mọi ảnh sinh ra kèm metadata (nhân vật, prompt, seed, thời gian). Nối vào
-`chat-ui-mockup.html`. Đây là thứ biến "công cụ" thành "sản phẩm".
+Chạy tối thiểu 20–30 lượt thật với model local để đo tỷ lệ fact đúng/sai/trùng,
+thời gian background extraction và tác động RAM. Chỉ thêm FTS5/embedding nếu 24
+fact gần nhất làm prompt nhiễu hoặc bỏ sót fact liên quan.
 
-### 3. Character consistency
-Trước mắt trên máy hiện tại: seed cố định cho mỗi nhân vật + IP-Adapter khoá mặt
-từ một ảnh gốc. Làm đầy đủ thì cần train LoRA → **phải có GPU rời**.
+### 2. Character consistency khả thi trên máy hiện tại
 
-### 4. Dọn kiến trúc
-Chuyển pipeline ảnh từ `app_gradio.py` sang `yumeai/pipelines/`, bỏ sạch `gr.*`
-khỏi tầng core. `app_gradio.py` chỉ còn là client mỏng để debug.
+Mỗi persona có ảnh gốc, seed và preset IP-Adapter/ReActor riêng. Đo 20 ảnh để so
+sánh trước/sau. LoRA hoãn tới khi có GPU rời đủ VRAM.
 
-### 5. Đổi model chat
-```bash
-ollama pull qwen2.5:3b     # hoặc qwen2.5:7b nếu RAM cho phép
-```
-Rồi đặt `OLLAMA_MODEL`. Đây là thay đổi rẻ nhất mà tác động lớn nhất tới chất
-lượng hội thoại.
+### 3. Tách pipeline ảnh khỏi Gradio
+
+Chuyển pipeline từ `app_gradio.py` sang `yumeai/pipelines/`; cả `/app` và Gradio
+gọi chung. Khi đó REST mới có đổi đồ/inpaint/giữ mặt đầy đủ.
+
+### 4. Hoàn thiện beta
+
+Gallery dạng lưới, export/delete dữ liệu, backup/restore, age gate và AI disclosure.
+Chỉ thêm auth/rate-limit/CORS chặt khi có quyết định mở ngoài localhost.
+
+### 5. Benchmark model chat
+
+So sánh model 3B/4B local đang có trên đúng máy này bằng cùng bộ hội thoại persona,
+đo RAM, token/giây, độ giữ vai và tiếng Việt; không chọn chỉ theo tên model.
+
+Chi tiết: [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md).
 
 ---
 
 ## 📌 Kỳ vọng cần giữ đúng
 
-Model local 3–8B **sẽ không bằng Claude hay GPT** — đó là hàng trăm tỷ tham số
-chạy trên datacenter. Với vai trò companion, thứ cần là **nhất quán và có cá
-tính**, không phải **thông thái**. Mục tiêu đúng của phần persona/prompt là làm
-nhân vật *không tuột vai* và *nhớ được người dùng*, chứ không phải làm nó thông
-minh hơn.
+Model local nhỏ không cần trở thành trợ lý thông thái. Với companion, ưu tiên là
+giữ vai, nhớ đúng, phản hồi tự nhiên và nhất quán hình ảnh. Mọi tính năng mới phải
+được đánh giá theo bốn tiêu chí đó và giới hạn phần cứng Radeon 680M.

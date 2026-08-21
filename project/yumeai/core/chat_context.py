@@ -16,10 +16,12 @@ Hai lỗi của bản cũ được sửa ở đây:
    hỏng âm thầm (model bắt đầu trả lời lạc đề mà không báo lỗi gì).
    Nay: cắt cửa sổ theo CHAT_HISTORY_MAX_MESSAGES.
 """
+import hashlib
+
 from yumeai.core.config import (
     CHAT_HISTORY_MAX_MESSAGES, CHAT_NUM_CTX, CHAT_TEMPERATURE, CHAT_TOP_P,
     CHAT_REPEAT_PENALTY, CHAT_NUM_PREDICT, CHAT_FEWSHOT, CHAT_SUMMARY,
-    CHAT_SUMMARY_EVERY,
+    CHAT_SUMMARY_EVERY, CHAT_SUMMARY_MAX_MESSAGES,
 )
 from yumeai.core.persona_prompt import build_system_prompt, build_fewshot_messages
 
@@ -120,6 +122,9 @@ def chat_options(temperature: float = None, num_predict: int = None) -> dict:
 # TRÍ NHỚ DÀI — nén các lượt đã rơi khỏi cửa sổ lịch sử
 # ══════════════════════════════════════════════════════════════════════════
 _SUMMARY_CACHE: dict = {}
+# Khoá cache gắn với nội dung nên số entry tăng theo độ dài hội thoại. Cận này chỉ
+# để tiến trình chạy nhiều ngày không phình bộ nhớ; vượt thì xoá sạch, lần sau tính lại.
+_SUMMARY_CACHE_MAX = 256
 
 
 def clear_memory_cache():
@@ -139,15 +144,44 @@ def summarize_old_history(history, persona_name: str = "") -> str:
     if not overflow:
         return ""
 
-    bucket = len(overflow) // max(1, CHAT_SUMMARY_EVERY)
-    key = (persona_name, bucket)
+    every = max(1, CHAT_SUMMARY_EVERY)
+    bucket = len(overflow) // every
+    # Chưa đủ một lô CHAT_SUMMARY_EVERY thì chưa tóm tắt. Không mất gì: mấy message
+    # đó sẽ nằm trong cửa sổ ngay khi lô đầu tiên đầy, chỉ chậm vài lượt.
+    if bucket <= 0:
+        return ""
+
+    # Cửa sổ tóm tắt phải ỔN ĐỊNH trong suốt một lô, nếu không lượt nào cũng là một
+    # lời gọi LLM mới. Cắt ở ranh giới lô gần nhất rồi mới giới hạn độ dài.
+    #
+    # Bản trước băm TOÀN BỘ overflow để làm khoá cache. Overflow đổi mỗi lượt nên
+    # khoá đổi mỗi lượt → cache không bao giờ trúng. Tệ hơn:
+    # summarize_conversation() cắt transcript ở 6000 ký tự nên từ khoảng lượt 50 trở
+    # đi input gửi vào LLM GIỐNG HỆT NHAU, tức mỗi lượt trả giá một lời gọi LLM để
+    # tính lại đúng kết quả cũ. Nay băm đúng phần thật sự được gửi đi.
+    window = overflow[: bucket * every][-CHAT_SUMMARY_MAX_MESSAGES:]
+    fingerprint_source = "\x1f".join(
+        f"{item['role']}\x1e{item['content']}" for item in window
+    )
+    fingerprint = hashlib.sha256(
+        fingerprint_source.encode("utf-8")
+    ).hexdigest()[:20]
+    # persona_name vẫn nằm trong khoá: hai nhân vật đọc cùng một đoạn hội thoại vẫn
+    # phải ra hai tóm tắt khác nhau.
+    key = (persona_name, fingerprint)
     if key in _SUMMARY_CACHE:
         return _SUMMARY_CACHE[key]
 
     # import muộn để tránh phụ thuộc vòng và để module này nhẹ khi chỉ cần lọc lịch sử
     from yumeai.services.ollama_service import summarize_conversation
-    summary = summarize_conversation(overflow)
-    _SUMMARY_CACHE[key] = summary
+    summary = summarize_conversation(window)
+    # KHÔNG cache chuỗi rỗng: Ollama chết cũng trả "", cache lại là khoá cứng
+    # "không có trí nhớ" cho tới hết phiên dù dịch vụ đã sống lại.
+    if summary:
+        # Cache chỉ để tránh gọi lại trong cùng một lô, không cần giữ mãi.
+        if len(_SUMMARY_CACHE) >= _SUMMARY_CACHE_MAX:
+            _SUMMARY_CACHE.clear()
+        _SUMMARY_CACHE[key] = summary
     return summary
 
 

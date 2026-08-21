@@ -1,0 +1,7 @@
+# Dự án anh em Yume Assistant nằm LỒNG trong thư mục này nhưng là REPO GIT RIÊNG.
+# Không có dòng này thì `git add -A` sẽ nuốt nó vào thành một gitlink rác, và lịch
+# sử của repo con biến mất khỏi cả hai bên.
+yume_assistant/
+
+__pycache__/
+*.pyc

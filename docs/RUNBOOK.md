@@ -32,17 +32,31 @@ cd project && python app_gradio.py     # UI Gradio, cổng 7860
 cd project && python main.py           # REST API, cổng 8000
 ```
 
+Khi chạy `main.py`, mở **http://127.0.0.1:8000/app**. Giao diện này dùng SQLite
+thật cho sidebar, lịch sử chat và gallery. `chat-ui-mockup.html` không còn dùng
+mock response/Picsum nữa.
+
 ### Kiểm tra nhanh
 ```bash
 curl http://127.0.0.1:8000/health      # {"ollama": true, "comfyui": true}
 ```
 UI Gradio hiện `🟢 Ollama | 🟢 ComfyUI` ở đầu trang.
 
+Kiểm tra DB/API:
+```bash
+curl http://127.0.0.1:8000/api/conversations?user_id=user_001
+curl http://127.0.0.1:8000/api/gallery?user_id=user_001
+curl "http://127.0.0.1:8000/api/memory?user_id=user_001&persona_id=yuki"
+```
+
 ---
 
 ## Chạy test (không cần dịch vụ nào)
 ```bash
 cd project && python test_router.py
+cd project && python test_storage.py
+cd project && python test_memory.py
+cd project && python test_api_storage.py
 ```
 Luôn chạy trước khi mở UI sau khi sửa code.
 
@@ -62,9 +76,28 @@ $env:YUMEAI_LOW_VRAM_MODE="1"           # "0" khi có GPU mạnh (bỏ cap steps
 $env:YUMEAI_FLUX_SAFE_STEPS="24"        # cap steps Flux
 $env:YUMEAI_AUTO_MASK_EDIT="1"          # ưu tiên mask+inpaint thay Flux khi đổi đồ
 $env:COMFY_MODELS_DIR="D:\...\models"   # chỉ cần khi để model ngoài project
+$env:YUMEAI_DATA_DIR="D:\YumeAIData"   # DB + ảnh; mặc định project/data
+$env:YUMEAI_MEMORY_FACTS="1"             # "0" để tắt fact extraction nền
+$env:YUMEAI_MEMORY_EVERY="12"            # số text message mỗi batch
+$env:YUMEAI_MEMORY_BATCH_SIZE="24"       # tối đa message đọc mỗi lần
 ```
 
 Bash (Linux/macOS): thay `$env:X="y"` bằng `export X=y`.
+
+---
+
+## Dữ liệu và backup
+
+Mặc định dữ liệu sản phẩm nằm tại:
+
+```text
+project/data/yumeai.db   # user, persona, conversation, message, memory, metadata ảnh
+project/data/images/     # file PNG đã tạo
+```
+
+`project/data/` đã được gitignore. Để backup khi app đã dừng, copy cả thư mục
+`data/`; không chỉ copy file DB vì gallery tham chiếu các PNG trong `images/`.
+Có thể đặt `YUMEAI_DATA_DIR` sang ổ ngoài trước khi khởi động.
 
 ---
 

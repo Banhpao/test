@@ -10,6 +10,45 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-08-21
+
+- Sửa 3 lỗi tầng trí nhớ/gallery: khoá cache tóm tắt băm đúng cửa sổ gửi cho LLM (54->18 lời gọi/60 lượt, D13), summarize_conversation cắt từ đầu thay vì bỏ phần mới, ghi memory_summary xuống DB, images.user_id thay INNER JOIN (D14). Thêm test_chat_context.py 7/7 + 3 test storage, tất cả chạy offline.
+
+---
+
+## 2026-08-21 — SQLite persistence + web companion UI
+
+### Fact memory chạy nền cho máy yếu
+
+- Nâng SQLite schema v1 → v2 không mất dữ liệu; thêm con trỏ
+  `memory_processed_message_id` để mỗi batch chỉ xử lý message mới.
+- Thêm `memory_service.py`: sau mỗi 12 text message, dùng model Ollama đang có với
+  context 2K để trích tối đa 8 fact; chạy sau SSE nên không chặn câu trả lời.
+- Lỗi extraction có cooldown 5 phút; batch không có fact vẫn được đánh dấu đã xem,
+  tránh gọi LLM lặp vô hạn trên máy yếu.
+- Không tự lưu mật khẩu, OTP, API key, tài khoản ngân hàng, giấy tờ định danh hoặc
+  địa chỉ chính xác.
+- Memory fact được ghép vào system prompt và dùng chung giữa các conversation của
+  cùng user–persona.
+- Thêm `GET/PUT/DELETE /api/memory`; web UI có panel xem, thêm, sửa, xoá và refresh
+  trí nhớ của nhân vật.
+- Test mới: storage 7/7, memory 3/3, API 4/4; router suite và pyflakes vẫn pass.
+
+- Thêm SQLite schema/repository cho user, character, conversation, message,
+  memory fact và image metadata; dữ liệu mặc định ở `project/data/`.
+- Thêm REST API tạo/liệt kê/mở conversation, đọc message và gallery.
+- `POST /api/chat` nhận `conversation_id`, đọc history từ DB, stream SSE dạng JSON
+  và lưu assistant reply khi hoàn tất; client cũ vẫn dùng `history` được.
+- Ảnh sinh qua REST được lưu PNG + prompt/model/style/seed/metadata, trả thêm
+  `image_url` và xuất hiện lại trong conversation sau khi mở app.
+- Biến `chat-ui-mockup.html` thành UI thật tại `/app`: sidebar/history/persona đọc
+  từ API; bỏ mock response, Picsum, credit và affection ngẫu nhiên.
+- Sửa cache memory summary có thể dùng nhầm giữa hai conversation cùng persona.
+- Thay FastAPI startup event deprecated bằng lifespan handler.
+- Dọn `env.example`, thêm cấu hình data path và hướng dẫn backup/runbook.
+- Thêm `test_storage.py` (5 test) và `test_api_storage.py` (3 test); router suite,
+  pyflakes, JavaScript parse và Uvicorn HTTP smoke đều pass.
+
 ## 2026-08-20
 
 - Tách dự án Yume Assistant (trợ lý kỹ thuật, RAG + tool + ROS2 sau này) sang repo riêng ../yume_assistant, copy 3 module lõi. Xem AGENTS.md của repo đó.

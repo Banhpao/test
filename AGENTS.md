@@ -46,9 +46,13 @@ formyhorny/
 ├── AGENTS.md, CLAUDE.md, docs/     ← bộ nhớ dự án (file này)
 └── project/
     ├── app_gradio.py        ~3800 dòng — UI Gradio + TOÀN BỘ pipeline ảnh
-    ├── main.py              ~200 dòng  — REST API (FastAPI) cho web UI thật
-    ├── chat-ui-mockup.html  UI web mẫu, gọi localhost:8000
+    ├── main.py              ~580 dòng  — REST API + persistence cho web UI thật
+    ├── chat-ui-mockup.html  UI web tại /app, dùng conversation/gallery API
     ├── test_router.py       ★ test chạy OFFLINE, không cần Ollama/ComfyUI
+    ├── test_storage.py      test SQLite thuần, không cần dịch vụ
+    ├── test_chat_context.py test trí nhớ dài: ĐẾM số lời gọi LLM tóm tắt
+    ├── test_memory.py       test fact extraction theo lô, không gọi Ollama thật
+    ├── test_api_storage.py  smoke test REST + SQLite với Ollama giả
     ├── devlog.py            ghi nhanh một dòng vào CHANGELOG
     ├── ComfyUI/             KHÔNG trong git — 93GB model, ~1.4GB custom_nodes
     └── yumeai/              ★ logic dùng chung — SỬA Ở ĐÂY, không copy sang nơi khác
@@ -60,9 +64,12 @@ formyhorny/
         │   ├── prompt_router.py   quyết định: chat / tạo ảnh / sửa ảnh
         │   ├── image_prompt.py    prompt text2img (positive + negative)
         │   └── runtime.py         Resource Guard (chỉ 1 job ComfyUI cùng lúc)
-        └── services/
-            ├── ollama_service.py  dịch, enrich, tóm tắt trí nhớ, chọn model
-            └── comfy_service.py   giao tiếp ComfyUI, preset chất lượng/upscale
+        ├── services/
+        │   ├── ollama_service.py  dịch, enrich, tóm tắt trí nhớ, chọn model
+        │   ├── memory_service.py  fact extraction theo lô + lọc bí mật
+        │   └── comfy_service.py   giao tiếp ComfyUI, preset chất lượng/upscale
+        └── storage/
+            └── database.py        SQLite: user/conversation/message/memory/image
 ```
 
 **Quy tắc số một:** `app_gradio.py` và `main.py` là **hai cửa vào của cùng một hệ
@@ -88,6 +95,8 @@ cd project && python app_gradio.py      # UI Gradio, cổng 7860
 cd project && python main.py            # REST API, cổng 8000
 ```
 
+Giao diện web thật của REST API: `http://127.0.0.1:8000/app`.
+
 **Không có ComfyUI thì không có ảnh nào.** ComfyUI không phải tuỳ chọn — nó *là*
 bộ phận vẽ. `app_gradio.py`/`main.py` chỉ dựng JSON workflow rồi POST sang nó.
 
@@ -97,6 +106,10 @@ bộ phận vẽ. `app_gradio.py`/`main.py` chỉ dựng JSON workflow rồi POS
 
 ```bash
 cd project && python test_router.py
+cd project && python test_storage.py
+cd project && python test_chat_context.py
+cd project && python test_memory.py
+cd project && python test_api_storage.py
 ```
 
 Chạy **offline**, không cần Ollama hay ComfyUI (các test cần dịch vụ sẽ tự bỏ qua
@@ -155,6 +168,10 @@ Mỗi dòng dưới đây là một bug đã thực sự xảy ra và đã tốn
 | Nuốt lỗi dịch rồi vẽ tiếp | Prompt tiếng Việt vào thẳng SD → ảnh rác mà không ai biết vì sao. **Dùng `translate_vi_en_ex()` và hiện cảnh báo.** |
 | Định nghĩa lại prompt/preset/persona ở entrypoint | Hai cửa vào cho hai kết quả. **Tất cả nằm trong `yumeai/`.** |
 | Thêm tính năng sửa ảnh mới | Xem mục 1. Ba trụ sản phẩm còn chưa xong. |
+| Băm khoá cache trên dữ liệu mà hàm bên dưới sẽ cắt bỏ | Khoá đổi mỗi lượt, cache không bao giờ trúng, mà input LLM lại giống hệt nhau → trả tiền tính lại đúng kết quả cũ. **Khoá phải bằng đúng thứ được gửi đi.** Xem D13. |
+| Cache kết quả rỗng khi dịch vụ lỗi | Ollama chết trả `""`; cache lại là khoá cứng "không có trí nhớ" tới hết phiên dù dịch vụ đã sống lại. **`if summary:` trước khi cache.** |
+| Cắt danh sách bằng `[:N]` khi phần MỚI mới là phần cần | `summarize_conversation()` từng giữ 6000 ký tự đầu → trí nhớ dài đóng băng ở đoạn đầu hội thoại, im lặng. Xem D13. |
+| Lọc theo user bằng INNER JOIN sang bảng có khoá ngoài NULL được | Ảnh `conversation_id IS NULL` biến mất khỏi gallery vĩnh viễn. **Cột sở hữu nằm thẳng trên bảng.** Xem D14. |
 
 ---
 

@@ -9,6 +9,22 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 COMFY_URL = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 
+# Dữ liệu sản phẩm (hội thoại, trí nhớ, gallery) nằm ngoài source code để có thể
+# backup/copy độc lập. SQLite là chủ đích: dự án local một người dùng không cần
+# thêm một tiến trình Postgres chỉ để lưu vài nghìn tin nhắn.
+DATA_DIR = os.path.abspath(os.getenv(
+    "YUMEAI_DATA_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data"),
+))
+DATABASE_PATH = os.path.abspath(os.getenv(
+    "YUMEAI_DATABASE_PATH",
+    os.path.join(DATA_DIR, "yumeai.db"),
+))
+GENERATED_IMAGES_DIR = os.path.abspath(os.getenv(
+    "YUMEAI_GENERATED_IMAGES_DIR",
+    os.path.join(DATA_DIR, "images"),
+))
+
 # Timeout (giây) chờ ComfyUI vẽ xong 1 job — nguồn DUY NHẤT cho app_gradio.py + main.py
 # (máy 4GB VRAM vẽ ControlNet/Flux/upscale có thể >5 phút). Chỉnh qua biến môi trường:
 #   $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"
@@ -60,6 +76,16 @@ CHAT_SUMMARY = os.getenv("YUMEAI_CHAT_SUMMARY", "1").strip().lower() not in {"0"
 # Cứ thêm bấy nhiêu message bị đẩy ra ngoài cửa sổ thì mới tóm tắt lại một lần
 # (tóm tắt mỗi lượt sẽ tốn thêm một lời gọi LLM cho mỗi tin nhắn).
 CHAT_SUMMARY_EVERY = int(os.getenv("YUMEAI_CHAT_SUMMARY_EVERY", "6"))
+# Số message tối đa đưa vào MỘT lần tóm tắt. Không có cận này thì overflow lớn dần
+# vô hạn: chat 200 lượt là mỗi lần tóm tắt phải nuốt gần 200 message, càng lúc càng
+# chậm, và summarize_conversation() cắt bớt ở phía sau nên phần MỚI NHẤT bị vứt đi
+# âm thầm — trí nhớ dài đóng băng ở đoạn đầu cuộc trò chuyện.
+# Các fact bền vững nằm ở bảng memory_facts (yumeai/services/memory_service.py),
+# nên hàm này chỉ cần lo phần hội thoại vừa rơi khỏi cửa sổ.
+CHAT_SUMMARY_MAX_MESSAGES = max(
+    CHAT_SUMMARY_EVERY,
+    int(os.getenv("YUMEAI_CHAT_SUMMARY_MAX_MESSAGES", "40")),
+)
 
 CHAT_TIMEOUT_SEC = int(os.getenv("YUMEAI_CHAT_TIMEOUT_SEC", "120"))
 
@@ -69,6 +95,22 @@ CHAT_HISTORY_MAX_MESSAGES = int(os.getenv("YUMEAI_CHAT_HISTORY_MAX", "12"))
 # Ollama đẩy model ra RAM (chạy chậm hẳn).
 #   $env:YUMEAI_CHAT_NUM_CTX="4096"
 CHAT_NUM_CTX = int(os.getenv("YUMEAI_CHAT_NUM_CTX", "4096"))
+
+# Trích memory fact theo LÔ sau khi đã trả lời xong, không gọi thêm LLM cho mỗi
+# message. Mặc định 12 text message ≈ 6 lượt chat, phù hợp máy chỉ có ~12GB RAM.
+MEMORY_FACTS_ENABLED = os.getenv(
+    "YUMEAI_MEMORY_FACTS", "1"
+).strip().lower() not in {"0", "false", "off", "no"}
+MEMORY_EXTRACTION_EVERY_MESSAGES = max(
+    4, int(os.getenv("YUMEAI_MEMORY_EVERY", "12"))
+)
+MEMORY_EXTRACTION_BATCH_SIZE = max(
+    MEMORY_EXTRACTION_EVERY_MESSAGES,
+    int(os.getenv("YUMEAI_MEMORY_BATCH_SIZE", "24")),
+)
+MEMORY_EXTRACTION_TIMEOUT_SEC = max(
+    20, int(os.getenv("YUMEAI_MEMORY_TIMEOUT_SEC", "90"))
+)
 
 # Trước đây hardcode r"D:\baitap\code py\formyhorny\ComfyUI\models" nên chỉ đúng
 # trên đúng một máy Windows. Nay tự dò theo vị trí package, vẫn override được bằng env.

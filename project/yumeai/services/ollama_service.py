@@ -218,10 +218,25 @@ def summarize_conversation(messages: list) -> str:
     """
     if not messages:
         return ""
-    transcript = "\n".join(
+    lines = [
         f"{'Người dùng' if m.get('role') == 'user' else 'Nhân vật'}: {m.get('content', '')}"
         for m in messages
-    )[:6000]
+    ]
+    # Cắt từ ĐẦU chứ không cắt từ cuối. Bản cũ dùng [:6000] — giữ 6000 ký tự ĐẦU —
+    # nên khi hội thoại dài ra, phần MỚI NHẤT không bao giờ lọt vào tóm tắt và trí
+    # nhớ dài đóng băng ở đoạn đầu cuộc trò chuyện, im lặng, không lỗi.
+    # Cắt theo ranh giới dòng để không đưa nửa câu vào prompt.
+    kept: list[str] = []
+    budget = 6000
+    for line in reversed(lines):
+        if budget - len(line) - 1 < 0:
+            break
+        kept.append(line)
+        budget -= len(line) + 1
+    transcript = "\n".join(reversed(kept))
+    if not transcript:
+        # Một message duy nhất mà dài hơn cả ngân sách: vẫn phải gửi phần cuối của nó.
+        transcript = lines[-1][-6000:]
 
     system = """Bạn là bộ nhớ của một nhân vật trong ứng dụng trò chuyện.
 Đọc đoạn hội thoại và rút ra những điều ĐÁNG NHỚ về người dùng và về mối quan hệ.
