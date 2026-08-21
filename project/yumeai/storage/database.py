@@ -269,6 +269,37 @@ class YumeDatabase:
             )
         return self.get_conversation(conversation_id) or {}
 
+    def get_or_create_conversation(
+        self,
+        user_id: str,
+        character_id: str,
+        *,
+        display_name: str = "",
+    ) -> dict:
+        """Hội thoại đang mở của (user, nhân vật); chưa có thì tạo mới.
+
+        Dành cho UI Gradio: ở đó không có khái niệm chọn hội thoại, người dùng chỉ
+        mở app rồi nói chuyện tiếp. Lấy hội thoại được đụng gần nhất để mở lại app
+        là nói tiếp câu chuyện cũ chứ không bắt đầu từ con số không.
+        """
+        self.ensure_user(user_id, display_name)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM conversations
+                WHERE user_id = ? AND character_id = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (user_id, character_id),
+            ).fetchone()
+        if row is not None:
+            existing = self.get_conversation(row["id"])
+            if existing:
+                return existing
+        return self.create_conversation(
+            user_id, character_id, display_name=display_name
+        )
+
     def get_conversation(self, conversation_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(

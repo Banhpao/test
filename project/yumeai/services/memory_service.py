@@ -15,6 +15,7 @@ import time
 
 import httpx
 
+from yumeai.core.chat_context import summarize_old_history
 from yumeai.core.config import (
     MEMORY_EXTRACTION_BATCH_SIZE,
     MEMORY_EXTRACTION_EVERY_MESSAGES,
@@ -155,6 +156,39 @@ def format_memory_context(facts: list[dict]) -> str:
         if key and value:
             lines.append(f"- {key}: {value}")
     return "\n".join(lines)
+
+
+def build_conversation_memory(
+    database,
+    conversation: dict,
+    history,
+    persona_name: str = "",
+) -> str:
+    """Dựng khối trí nhớ dài cho MỘT lượt chat — dùng chung cho cả hai cửa vào.
+
+    Hàm này nằm ở đây thay vì viết lại trong main.py và app_gradio.py, vì đúng chỗ
+    này là nơi dự án từng lệch pha: hai entrypoint tự dựng ngữ cảnh theo hai cách rồi
+    cùng một câu cho ra hai kết quả (xem D6).
+
+    Chặn đồng bộ: có thể gọi LLM tóm tắt. FastAPI phải bọc asyncio.to_thread.
+    """
+    facts = database.list_memory_facts(
+        conversation["user_id"], conversation["character_id"]
+    )
+    fact_context = format_memory_context(facts)
+
+    session_summary = summarize_old_history(history, persona_name)
+    stored_summary = (conversation.get("memory_summary") or "").strip()
+    # Ghi lại để tóm tắt SỐNG QUA restart. Trước D13 cột memory_summary được đọc
+    # nhưng không nơi nào ghi, nên mở lại app là tính lại từ đầu.
+    if session_summary and session_summary != stored_summary:
+        database.update_memory_summary(conversation["id"], session_summary)
+
+    # Dùng bản vừa tính, KHÔNG ghép với bản đã lưu — hai bản gần trùng nhau nên ghép
+    # lại là nhét trí nhớ hai lần vào system prompt. Bản đã lưu chỉ là lưới đỡ cho lúc
+    # Ollama chết (session_summary rỗng) hoặc vừa mở lại app.
+    long_memory = session_summary or stored_summary
+    return "\n".join(part for part in (long_memory, fact_context) if part)
 
 
 def refresh_conversation_memory(database, conversation_id: str) -> dict:

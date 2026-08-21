@@ -338,3 +338,47 @@ chưa có đăng nhập, giấu mất ảnh của người dùng tệ hơn.
 
 **Đã loại.** `LEFT JOIN ... OR i.conversation_id IS NULL` — chữa triệu chứng nhưng
 giữ nguyên mô hình sai "ảnh thuộc về hội thoại", và làm ảnh mồ côi hiện với mọi user.
+
+---
+
+## D15 — Gradio dùng chung DB với REST; khối trí nhớ nằm ở một chỗ
+**Ngày:** 2026-08-21 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Sau khi có SQLite (D11), REST nhớ được qua nhiều phiên còn Gradio vẫn
+giữ toàn bộ hội thoại trong `gr.State` — đóng app là mất sạch. Hai cửa vào nhớ hai
+kiểu khác nhau đúng là thứ D6 sinh ra để chặn. Thêm nữa `app_gradio.py:3489` gọi
+`build_persona_messages()` **thiếu `user_name`**, nên qua Gradio nhân vật chưa bao
+giờ biết tên người dùng còn qua REST thì biết.
+
+**Quyết định.**
+
+1. `app_gradio.py` mở **cùng một file SQLite** với `main.py`. Lịch sử đưa vào prompt
+   lấy từ **DB**, không từ `gr.State`.
+2. **Khối trí nhớ nằm ở một chỗ duy nhất**: `memory_service.build_conversation_memory()`.
+   Cả hai entrypoint gọi nó. `main.py` đã được sửa để dùng lại hàm này thay vì bản
+   copy trong endpoint. Nguyên tắc D6 áp cho *ngữ cảnh chat* y như đã áp cho prompt
+   ảnh và preset.
+3. Gradio dùng **một người dùng ngầm định** `DEFAULT_USER_ID` (mặc định `user_001`,
+   trùng mặc định của `ChatReq.user_id`). **Không thêm ô nhập tên** — thêm input UI là
+   phải sửa cả `shared_inputs`, chữ ký `smart_unified_chat` và cái `assert` ở cuối file.
+4. **Lỗi lưu trữ không được giết cuộc trò chuyện.** Mọi lời gọi DB trong `app_gradio.py`
+   đi qua `_db_try()`: hỏng thì in cảnh báo **nói rõ đang hỏng việc gì** rồi chạy tiếp
+   không có trí nhớ. Gradio còn là cửa debug pipeline ảnh; mất trí nhớ khó chịu, mất
+   luôn khả năng chat thì tệ hơn.
+5. Trích fact chạy **thread nền** sau khi trả lời xong, giống `BackgroundTask` bên REST.
+
+**Đã loại.**
+
+- **Nạp lại khung chat từ DB khi mở app.** Cần `demo.load()` và đụng vào
+  `_pack_main_outputs` — hàm này dùng chung với `auto_outfit_handler`, mà
+  `auto_btn.click` khai outputs 5 phần tử. Khung chat vẫn trống khi mở lại, nhưng
+  **nhân vật thì nhớ** — đó mới là thứ người dùng cảm nhận được.
+- **`conversation_id` làm `gr.State`.** Không có đường nào để `_pack_main_outputs`
+  biết `conv_id`; để mặc định `None` thì mỗi lần yield sẽ ghi `None` đè lên State,
+  triệu chứng là "thỉnh thoảng nhân vật quên". Thay bằng
+  `get_or_create_conversation(user_id, persona_id)` gọi ở đầu mỗi lượt.
+- **Đổi chữ ký `_stream_persona_chat`.** Không cần: `persona_id` đã có sẵn trong tham
+  số, nên hai chỗ gọi (3619, 3669) không phải sửa dòng nào.
+
+**Còn nợ.** Ảnh sinh từ Gradio chưa được ghi vào bảng `images` — gallery bền vững
+hiện chỉ có ở đường REST. Cần hook ở `runtime.run_comfy_job` (xem lộ trình giai đoạn D).

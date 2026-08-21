@@ -24,6 +24,12 @@ GENERATED_IMAGES_DIR = os.path.abspath(os.getenv(
     "YUMEAI_GENERATED_IMAGES_DIR",
     os.path.join(DATA_DIR, "images"),
 ))
+# UI Gradio không có khái niệm đăng nhập (grep user_id trong app_gradio.py: 0 kết quả),
+# nhưng mọi bảng dữ liệu đều khoá theo user_id. Dùng một người dùng ngầm định thay vì
+# thêm ô nhập tên — bản local chỉ có một người, và thêm input UI thì phải sửa cả
+# shared_inputs lẫn chữ ký smart_unified_chat (xem mục 6 AGENTS.md).
+# Trùng mặc định của ChatReq.user_id bên main.py để hai cửa vào nhìn thấy cùng dữ liệu.
+DEFAULT_USER_ID = os.getenv("YUMEAI_DEFAULT_USER_ID", "user_001").strip() or "user_001"
 
 # Timeout (giây) chờ ComfyUI vẽ xong 1 job — nguồn DUY NHẤT cho app_gradio.py + main.py
 # (máy 4GB VRAM vẽ ControlNet/Flux/upscale có thể >5 phút). Chỉnh qua biến môi trường:

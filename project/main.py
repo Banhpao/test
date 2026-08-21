@@ -30,7 +30,6 @@ from yumeai.core.personas import PERSONAS
 from yumeai.core.chat_context import (
     build_persona_messages,
     chat_options,
-    summarize_old_history,
 )
 # Prompt text2img dùng CHUNG với app_gradio.py — hai cửa vào phải cho ra cùng một ảnh
 from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
@@ -46,7 +45,7 @@ from yumeai.services.comfy_service import (
     UPSCALE_NONE,
 )
 from yumeai.services.memory_service import (
-    format_memory_context,
+    build_conversation_memory,
     refresh_conversation_memory,
 )
 from yumeai.storage import YumeDatabase
@@ -365,33 +364,15 @@ async def chat(req: ChatReq):
             user_message,
         )
 
-        facts = await asyncio.to_thread(
-            database.list_memory_facts,
-            conversation["user_id"],
-            conversation["character_id"],
-        )
-        fact_context = format_memory_context(facts)
-        session_summary = await asyncio.to_thread(
-            summarize_old_history,
+        # Dựng trí nhớ bằng hàm DÙNG CHUNG với app_gradio.py — không viết lại logic
+        # ngữ cảnh ở entrypoint, đó đúng là chỗ dự án từng lệch pha (D6).
+        # Có thể gọi LLM tóm tắt nên phải rời khỏi event loop.
+        memory_context = await asyncio.to_thread(
+            build_conversation_memory,
+            database,
+            conversation,
             history,
             persona.get("name", ""),
-        )
-        stored_summary = (conversation.get("memory_summary") or "").strip()
-        # Ghi lại tóm tắt để nó SỐNG QUA restart. Trước đây cột memory_summary được
-        # đọc nhưng không có chỗ nào ghi, nên nó vĩnh viễn rỗng và mỗi lần mở lại app
-        # là tính lại từ đầu.
-        if session_summary and session_summary != stored_summary:
-            await asyncio.to_thread(
-                database.update_memory_summary,
-                req.conversation_id,
-                session_summary,
-            )
-        # Dùng bản vừa tính, KHÔNG ghép với bản đã lưu — hai bản gần như trùng nhau nên
-        # ghép lại là nhét trí nhớ hai lần vào system prompt. Bản đã lưu chỉ là lưới đỡ
-        # cho lúc Ollama chết (session_summary rỗng) hoặc vừa mở lại app.
-        long_memory = session_summary or stored_summary
-        memory_context = "\n".join(
-            part for part in (long_memory, fact_context) if part
         )
 
     # Tóm tắt lịch sử có thể gọi Ollama nên không được chặn event loop FastAPI.

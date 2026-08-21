@@ -18,6 +18,12 @@ Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề l�
   conversation, cũng không gọi LLM lại mỗi lượt.
 - Tóm tắt được ghi xuống `conversations.memory_summary` nên sống qua restart, và
   làm lưới đỡ khi Ollama chết.
+- **Gradio và REST dùng chung một file SQLite** (D15): đóng Gradio mở lại, khung chat
+  trống nhưng nhân vật vẫn nhớ chuyện cũ. Khối trí nhớ dựng bằng một hàm duy nhất
+  `memory_service.build_conversation_memory()` nên hai cửa vào không lệch pha được.
+- Gradio nay truyền `user_name`; trước đây chỉ REST truyền, nên qua Gradio nhân vật
+  chưa bao giờ biết tên người dùng.
+- Lỗi lưu trữ không giết cuộc trò chuyện: `_db_try()` in cảnh báo cụ thể rồi chạy tiếp.
 - REST API lưu user message và assistant reply vào SQLite theo `conversation_id`.
 - Đóng app/mở lại vẫn xem được lịch sử qua `http://127.0.0.1:8000/app`.
 - Client cũ không có `conversation_id` vẫn dùng được trường `history` như trước.
@@ -36,8 +42,9 @@ Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề l�
 
 **Dữ liệu và UI**
 
-- SQLite schema v2: `users`, `characters`, `conversations`, `messages`,
-  `memory_facts`, `images`; migration v1 giữ nguyên conversation cũ.
+- SQLite schema **v3**: `users`, `characters`, `conversations`, `messages`,
+  `memory_facts`, `images`; migration v1→v2→v3 giữ nguyên dữ liệu cũ và backfill
+  chủ sở hữu cho ảnh (D14). Chỉ dùng thư viện chuẩn, không ORM.
 - Web UI đọc sidebar/persona/history từ API thật; không còn mock response, Picsum,
   credit giả hay affection ngẫu nhiên.
 - Dữ liệu mặc định tại `project/data/`, có thể đổi bằng `YUMEAI_DATA_DIR`.
@@ -46,10 +53,11 @@ Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề l�
 
 Chạy được **trên cả máy Linux không có venv** (chỉ cần thư viện chuẩn):
 
-- `python test_storage.py`: **10/10 pass** — gồm migration v1→v2→v3 trên DB có dữ
+- `python test_storage.py`: **12/12 pass** — gồm migration v1→v2→v3 trên DB có dữ
   liệu thật, và ca "ảnh không gắn hội thoại vẫn phải nằm trong gallery".
-- `python test_chat_context.py`: **7/7 pass** — đếm số lời gọi LLM tóm tắt bằng
-  module Ollama giả. Cả 7 test này **fail trên code trước D13**, không phải test cho vui.
+- `python test_chat_context.py`: **12/12 pass** — 7 test đếm số lời gọi LLM tóm tắt
+  bằng module Ollama giả (cả 7 **fail trên code trước D13**, không phải test cho vui),
+  5 test cho khối trí nhớ dùng chung hai cửa vào (D15).
 
 Cần venv (máy Windows):
 
@@ -78,7 +86,6 @@ LLM từ không giới hạn → tối đa 40 message.
 |---|---|
 | **Chưa có relevance retrieval** | Fact extraction đã chạy, nhưng hiện đưa tối đa 24 fact gần nhất vào prompt. Chỉ cần FTS5/embedding khi dữ liệu thực tế đủ lớn để benchmark. |
 | **Character consistency chưa đủ** | Appearance tag chưa khoá được đúng một khuôn mặt. Cần ảnh gốc + seed/preset IP-Adapter trước; LoRA cần GPU rời. |
-| **Gradio chưa dùng DB** | Persistence/gallery hiện là đường FastAPI `/app`; Gradio vẫn giữ state trong phiên và là cửa debug pipeline ảnh. |
 | **Chưa có authentication** | Dữ liệu phân tách bằng `user_id`, nhưng đây chưa phải đăng nhập. An toàn khi chỉ bind localhost; không được mở Internet như hiện tại. |
 | **Model chat mặc định quá nhỏ** | `llama3.2:1b` giữ vai kém. Tối thiểu nên dùng model 3B phù hợp RAM sau khi benchmark trên máy thật. |
 
@@ -89,7 +96,8 @@ LLM từ không giới hạn → tối đa 40 message.
 | `app_gradio.py` là khối ~3800 dòng | Pipeline ảnh dính Gradio; REST mới dùng chung chat + text2img, chưa dùng được các edit pipeline nâng cao. |
 | `requirements.txt` chưa pin version | Có rủi ro lệch Gradio/FastAPI giữa hai máy. |
 | Chưa có migration runner | Schema hiện ở v3, migrate bằng cách kiểm `PRAGMA table_info` rồi `ALTER TABLE` — idempotent và đã có test v1→v2→v3, nhưng vẫn chưa phải runner tuần tự thật. |
-| Tóm tắt dùng cửa sổ trôi | Sau ~40 message overflow, fact từ đầu hội thoại rơi khỏi tóm tắt (D13). Đường bền vững là `memory_facts`, nhưng **chỉ có ở REST**. Làm đúng hẳn cần tóm tắt cuộn (summary cũ + phần mới → summary mới). |
+| Tóm tắt dùng cửa sổ trôi | Sau ~40 message overflow, fact từ đầu hội thoại rơi khỏi tóm tắt (D13). Đường bền vững là `memory_facts` — nay đã có ở **cả hai** cửa vào (D15). Làm đúng hẳn cần tóm tắt cuộn (summary cũ + phần mới → summary mới). |
+| Ảnh từ Gradio chưa vào gallery | Bảng `images` mới chỉ được ghi ở đường REST. Cần hook ở `runtime.run_comfy_job` — điểm nghẽn duy nhất mà cả 8 chỗ gọi đều đi qua (D15). |
 | Chưa test ảnh tự động | Test mới phủ storage/API; ComfyUI workflow vẫn cần service/model thật. |
 | `ComfyUI/` không trong git | 93GB model + custom nodes phải copy/cài riêng khi chuyển máy. |
 

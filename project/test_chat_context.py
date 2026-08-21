@@ -1,13 +1,18 @@
-"""Test offline cho trí nhớ dài trong chat_context; không cần Ollama.
+"""Test offline cho trí nhớ dài: cache tóm tắt + khối trí nhớ dùng chung hai cửa vào.
 
-Cắm một module ollama_service giả vào sys.modules để ĐẾM số lời gọi LLM. Đây là
-thứ duy nhất đo được cái giá thật của tóm tắt: trên máy iGPU/CPU mỗi lời gọi là
-vài giây tới vài chục giây chặn ngay trước khi người dùng thấy token đầu tiên.
+Cắm module ollama_service giả vào sys.modules để ĐẾM số lời gọi LLM. Đây là thứ duy
+nhất đo được cái giá thật của tóm tắt: trên máy iGPU/CPU mỗi lời gọi là vài giây tới
+vài chục giây chặn ngay trước khi người dùng thấy token đầu tiên.
+
+`httpx` cũng bị cắm giả để chạy được trên máy chưa cài venv — memory_service import
+nó ở mức module nhưng build_conversation_memory không hề dùng tới.
 """
 
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 
 
 def _install_fake_ollama():
@@ -25,6 +30,7 @@ def _install_fake_ollama():
 
 
 CALLS, FAKE = _install_fake_ollama()
+sys.modules.setdefault("httpx", types.ModuleType("httpx"))
 
 from yumeai.core.chat_context import clear_memory_cache, summarize_old_history  # noqa: E402
 from yumeai.core.config import (  # noqa: E402
@@ -32,6 +38,10 @@ from yumeai.core.config import (  # noqa: E402
     CHAT_SUMMARY_EVERY,
     CHAT_SUMMARY_MAX_MESSAGES,
 )
+from yumeai.services.memory_service import build_conversation_memory  # noqa: E402
+from yumeai.storage import YumeDatabase  # noqa: E402
+
+TEST_PERSONAS = {"yuki": {"name": "Yuki"}, "hana": {"name": "Hana"}}
 
 
 def _history(turns: int) -> list[dict]:
@@ -127,6 +137,71 @@ class SummaryCacheTests(unittest.TestCase):
         """Chưa tràn cửa sổ thì không được gọi LLM lần nào."""
         summarize_old_history(_history(CHAT_HISTORY_MAX_MESSAGES // 2), "Yuki")
         self.assertEqual(CALLS, [])
+
+
+class SharedMemoryContextTests(unittest.TestCase):
+    """build_conversation_memory là hàm DÙNG CHUNG cho main.py và app_gradio.py.
+
+    Nó nằm ở một chỗ chính vì D6: trước đây hai entrypoint tự dựng ngữ cảnh theo hai
+    cách rồi cùng một câu cho ra hai kết quả khác nhau.
+    """
+
+    def setUp(self):
+        CALLS.clear()
+        clear_memory_cache()
+        FAKE.summarize_conversation = lambda messages: (
+            CALLS.append(list(messages)) or f"- tóm tắt {len(messages)} message"
+        )
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = YumeDatabase(Path(self.tmp.name) / "yumeai.db")
+        self.db.initialize(TEST_PERSONAS)
+        self.conv = self.db.get_or_create_conversation("user_001", "yuki")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _long_history(self):
+        return _history((CHAT_HISTORY_MAX_MESSAGES + CHAT_SUMMARY_EVERY * 2) // 2)
+
+    def test_summary_is_written_back_to_the_database(self):
+        """Tóm tắt phải sống qua restart, không tính lại mỗi lần mở app."""
+        memory = build_conversation_memory(
+            self.db, self.conv, self._long_history(), "Yuki"
+        )
+        self.assertTrue(memory)
+        stored = self.db.get_conversation(self.conv["id"])["memory_summary"]
+        self.assertEqual(stored, memory)
+
+    def test_stored_summary_is_not_concatenated_with_the_fresh_one(self):
+        """Không được ghép bản đã lưu với bản vừa tính — nhét trí nhớ hai lần."""
+        history = self._long_history()
+        first = build_conversation_memory(self.db, self.conv, history, "Yuki")
+        reloaded = self.db.get_conversation(self.conv["id"])
+        second = build_conversation_memory(self.db, reloaded, history, "Yuki")
+        self.assertEqual(second, first)
+
+    def test_stored_summary_is_the_fallback_when_ollama_is_down(self):
+        """Ollama chết thì dùng bản đã lưu, không để nhân vật mất sạch trí nhớ."""
+        history = self._long_history()
+        good = build_conversation_memory(self.db, self.conv, history, "Yuki")
+        reloaded = self.db.get_conversation(self.conv["id"])
+
+        clear_memory_cache()
+        FAKE.summarize_conversation = lambda messages: ""
+        degraded = build_conversation_memory(self.db, reloaded, history, "Yuki")
+        self.assertEqual(degraded, good)
+
+    def test_facts_are_included_in_the_memory_block(self):
+        self.db.upsert_memory_fact("user_001", "yuki", "ten_goi", "Bánh Páo")
+        memory = build_conversation_memory(self.db, self.conv, _history(2), "Yuki")
+        self.assertIn("ten_goi: Bánh Páo", memory)
+
+    def test_two_characters_keep_separate_facts(self):
+        """Fact theo cặp user–nhân vật: Hana không đọc được trí nhớ của Yuki."""
+        self.db.upsert_memory_fact("user_001", "yuki", "bi_mat", "chỉ kể cho Yuki")
+        hana_conv = self.db.get_or_create_conversation("user_001", "hana")
+        memory = build_conversation_memory(self.db, hana_conv, _history(2), "Hana")
+        self.assertNotIn("bi_mat", memory)
 
 
 if __name__ == "__main__":

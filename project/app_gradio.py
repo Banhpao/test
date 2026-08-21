@@ -80,6 +80,47 @@ from yumeai.core.personas import PERSONA, PERSONAS
 from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
 # Lịch sử chat + options Ollama dùng CHUNG với main.py — xem yumeai/core/chat_context.py
 from yumeai.core.chat_context import build_persona_messages, chat_options
+
+# ══════════════════════════════════
+# TRÍ NHỚ BỀN VỮNG — cùng một file SQLite với main.py
+# ══════════════════════════════════
+# Trước đây Gradio giữ toàn bộ hội thoại trong gr.State: đóng app là mất sạch và nhân
+# vật không nhớ gì qua phiên, trong khi REST đã có DB từ 2026-08-21. Hai cửa vào nhớ
+# hai kiểu khác nhau đúng là thứ D6 sinh ra để chặn.
+# Gradio không có đăng nhập (grep user_id: 0 kết quả) nên dùng DEFAULT_USER_ID —
+# không thêm ô nhập tên, vì thêm input UI là phải sửa cả shared_inputs lẫn chữ ký
+# smart_unified_chat và cái assert ở cuối file.
+from yumeai.core.config import DATABASE_PATH, DEFAULT_USER_ID
+from yumeai.services.memory_service import (
+    build_conversation_memory,
+    refresh_conversation_memory,
+)
+from yumeai.storage import YumeDatabase
+
+try:
+    _DATABASE = YumeDatabase(DATABASE_PATH)
+    _DATABASE.initialize(PERSONAS)
+    print(f"💾 Trí nhớ bền vững: {DATABASE_PATH}")
+except Exception as _db_err:
+    _DATABASE = None
+    print(f"⚠️ KHÔNG mở được database ({_db_err}).\n"
+          f"   Chat vẫn chạy được nhưng KHÔNG lưu lịch sử — đóng app là nhân vật quên sạch.\n"
+          f"   Kiểm tra quyền ghi ở {DATABASE_PATH}, hoặc đặt YUMEAI_DATA_DIR sang chỗ khác.")
+
+
+def _db_try(what: str, fn, *args, **kwargs):
+    """Gọi DB nhưng KHÔNG để lỗi lưu trữ giết chết cuộc trò chuyện.
+
+    Gradio còn là cửa debug pipeline ảnh: mất trí nhớ thì khó chịu, mất luôn khả năng
+    chat thì tệ hơn nhiều. Vẫn in cảnh báo NÓI RÕ đang hỏng việc gì, không nuốt im lặng.
+    """
+    if _DATABASE is None:
+        return None
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        print(f"⚠️ Lỗi lưu trữ khi {what}: {e}")
+        return None
 from yumeai.services.ollama_service import (
     get_translate_model,
     translate_vi_en,
@@ -3484,9 +3525,43 @@ def _stream_persona_chat(history, user_msg, text, persona_id,
     yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
                              keep_current=keep_current, next_tool_once=tool_once)
 
+    # ── Trí nhớ bền vững: lấy hội thoại đang mở của nhân vật này ──
+    # Lịch sử đưa vào prompt lấy từ DB chứ không từ gr.State, nên mở lại app là nói
+    # tiếp câu chuyện cũ. Khung chat vẫn trống (State là của phiên), nhưng nhân vật
+    # nhớ — đó mới là thứ người dùng cảm nhận được.
+    conversation = _db_try(
+        "mở hội thoại", _DATABASE.get_or_create_conversation,
+        DEFAULT_USER_ID, persona_id,
+    ) if _DATABASE else None
+
+    prompt_history = history
+    memory_summary = None
+    user_name = ""
+    if conversation:
+        stored = _db_try("đọc lịch sử", _DATABASE.list_messages, conversation["id"]) or []
+        prompt_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in stored
+            if m.get("content_type", "text") == "text"
+        ]
+        user_name = (conversation.get("user_name") or "").strip()
+        # Ghi tin nhắn SAU khi đã đọc lịch sử: build_persona_messages tự nối câu vừa gõ
+        # vào cuối, đọc sau là câu đó bị đếm hai lần.
+        if (text or "").strip():
+            _db_try("lưu tin nhắn", _DATABASE.append_message,
+                    conversation["id"], "user", text)
+        # Hàm DÙNG CHUNG với main.py — không dựng lại ngữ cảnh riêng ở entrypoint (D6).
+        memory_summary = _db_try(
+            "dựng trí nhớ", build_conversation_memory,
+            _DATABASE, conversation, prompt_history, persona.get("name", ""),
+        )
+
     # build_persona_messages dựng: system prompt giàu chi tiết + trí nhớ dài
     # (tóm tắt các lượt đã rơi khỏi cửa sổ) + few-shot giữ giọng + lịch sử gần đây.
-    messages = build_persona_messages(persona, history, text)
+    # memory_summary=None nghĩa là "tự tính lấy" — đúng đường dự phòng khi DB hỏng.
+    messages = build_persona_messages(persona, prompt_history, text,
+                                      memory_summary=memory_summary,
+                                      user_name=user_name)
     full = ""
     try:
         with httpx.Client(timeout=CHAT_TIMEOUT_SEC) as c:
@@ -3507,6 +3582,17 @@ def _stream_persona_chat(history, user_msg, text, persona_id,
                     current[-1] = {"role": "assistant", "content": full}
                     yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
                                              keep_current=keep_current, next_tool_once=tool_once)
+        if full.strip() and conversation:
+            _db_try("lưu câu trả lời", _DATABASE.append_message,
+                    conversation["id"], "assistant", full.strip())
+            # Trích fact chạy NỀN sau khi đã trả lời xong — nó gọi LLM lần nữa, để trên
+            # đường nóng là người dùng ngồi chờ thêm cả chục giây trên máy CPU.
+            threading.Thread(
+                target=_db_try,
+                args=("trích trí nhớ", refresh_conversation_memory,
+                      _DATABASE, conversation["id"]),
+                daemon=True,
+            ).start()
         if not full.strip():
             current[-1] = {"role": "assistant",
                            "content": "(Ollama không trả về nội dung. Kiểm tra `ollama serve` "

@@ -166,7 +166,7 @@ Mỗi dòng dưới đây là một bug đã thực sự xảy ra và đã tốn
 | Chốt tên model lúc import | Ollama chưa bật là khoá cứng cả phiên. **Dùng `get_translate_model()`.** |
 | Trả về chuỗi rỗng khi lỗi rồi để bên gọi tự đoán | "Không tìm thấy model!" trong khi thủ phạm là ComfyUI chưa bật. **Ném lỗi có hướng dẫn cụ thể.** |
 | Nuốt lỗi dịch rồi vẽ tiếp | Prompt tiếng Việt vào thẳng SD → ảnh rác mà không ai biết vì sao. **Dùng `translate_vi_en_ex()` và hiện cảnh báo.** |
-| Định nghĩa lại prompt/preset/persona ở entrypoint | Hai cửa vào cho hai kết quả. **Tất cả nằm trong `yumeai/`.** |
+| Định nghĩa lại prompt/preset/persona **hoặc khối trí nhớ** ở entrypoint | Hai cửa vào cho hai kết quả. **Tất cả nằm trong `yumeai/`.** Trí nhớ dùng `memory_service.build_conversation_memory()`, xem D15. |
 | Thêm tính năng sửa ảnh mới | Xem mục 1. Ba trụ sản phẩm còn chưa xong. |
 | Băm khoá cache trên dữ liệu mà hàm bên dưới sẽ cắt bỏ | Khoá đổi mỗi lượt, cache không bao giờ trúng, mà input LLM lại giống hệt nhau → trả tiền tính lại đúng kết quả cũ. **Khoá phải bằng đúng thứ được gửi đi.** Xem D13. |
 | Cache kết quả rỗng khi dịch vụ lỗi | Ollama chết trả `""`; cache lại là khoá cứng "không có trí nhớ" tới hết phiên dù dịch vụ đã sống lại. **`if summary:` trước khi cache.** |

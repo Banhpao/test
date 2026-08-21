@@ -132,6 +132,26 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(conversation["title"], "old")
         self.assertEqual(conversation["memory_processed_message_id"], 0)
 
+    def test_get_or_create_reuses_the_open_conversation(self):
+        """Gradio không chọn hội thoại — mở lại app phải nói tiếp, không tạo mới."""
+        first = self.db.get_or_create_conversation("user_001", "yuki")
+        self.db.append_message(first["id"], "user", "Chào em")
+        again = self.db.get_or_create_conversation("user_001", "yuki")
+
+        self.assertEqual(again["id"], first["id"])
+        self.assertEqual(len(self.db.list_conversations("user_001")), 1)
+        self.assertEqual(again["message_count"], 1)
+
+    def test_get_or_create_separates_characters_and_users(self):
+        yuki = self.db.get_or_create_conversation("user_001", "yuki")
+        hana = self.db.get_or_create_conversation("user_001", "hana")
+        other = self.db.get_or_create_conversation("user_002", "yuki")
+
+        self.assertNotEqual(yuki["id"], hana["id"])
+        self.assertNotEqual(yuki["id"], other["id"])
+        self.assertEqual(len(self.db.list_conversations("user_001")), 2)
+        self.assertEqual(len(self.db.list_conversations("user_002")), 1)
+
     def test_image_without_conversation_still_shows_in_gallery(self):
         """Ảnh sinh ngoài hội thoại KHÔNG được biến mất khỏi gallery.
 

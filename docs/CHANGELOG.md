@@ -12,6 +12,12 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ## 2026-08-21
 
+- Nối Gradio vào cùng SQLite với REST (D15): lịch sử prompt đọc từ DB nên mở lại app nhân vật vẫn nhớ; Gradio nay truyền user_name (trước đây chưa bao giờ có); khối trí nhớ gom vào memory_service.build_conversation_memory() dùng chung hai cửa vào, main.py bỏ bản copy; lỗi DB không giết chat (_db_try). Thêm get_or_create_conversation + 9 test, tổng 24 test offline.
+
+---
+
+## 2026-08-21
+
 - Sửa 3 lỗi tầng trí nhớ/gallery: khoá cache tóm tắt băm đúng cửa sổ gửi cho LLM (54->18 lời gọi/60 lượt, D13), summarize_conversation cắt từ đầu thay vì bỏ phần mới, ghi memory_summary xuống DB, images.user_id thay INNER JOIN (D14). Thêm test_chat_context.py 7/7 + 3 test storage, tất cả chạy offline.
 
 ---
