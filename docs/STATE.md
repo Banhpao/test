@@ -66,8 +66,9 @@ Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề l�
   Mục "Dữ liệu của bạn" (thanh bên) xuất zip toàn bộ dữ liệu và xoá toàn bộ (gõ "XOÁ");
   bộ sưu tập xoá được từng ảnh, đầu khung chat xoá được cuộc trò chuyện (D20).
 - Nhắn "vẽ …"/"gửi ảnh đi" trong khung chat `/app` thì nhân vật tự vẽ và gửi ảnh vào hội
-  thoại (`POST /api/chat/intent`, dùng chung bộ định tuyến với Gradio). Đường vẽ thật trên
-  RTX 3050 vẫn **chưa chạy lần nào** — mới thử với ComfyUI giả.
+  thoại (`POST /api/chat/intent`, dùng chung bộ định tuyến với Gradio). **Đã vẽ thật lần đầu
+  trên RTX 3050 ngày 27/10**: 2 ảnh SD1.5 mức "Tốt nhất", 40–99 s/ảnh (TESTLOG). Bộ định tuyến còn
+  hiểu nhầm câu hỏi có chữ "vẽ" thành lệnh vẽ.
 - Dữ liệu mặc định tại `project/data/`, có thể đổi bằng `YUMEAI_DATA_DIR`.
 
 **Kiểm chứng 2026-08-21**
@@ -106,7 +107,10 @@ cache tóm tắt đã sửa để đủ một lô D13). Chưa chạy trên máy 
 **Kiểm chứng 2026-10-26** (Windows, laptop RTX 3050, `project\.venv` mới trên ổ rời, sau D24):
 `E:\duan\_vscode\KIEM-THU-DU-AN.cmd` — **15/15 đạt**: 14 file test offline + ComfyUI
 `--quick-test-for-ci --cpu` khởi động và nạp custom node (nhật ký `_vscode\nhat-ky\LAPTOP-1AMPNHOP-20261026-191352-kiem-thu.txt`).
-Vẫn dùng Ollama/ComfyUI giả trong test; chưa vẽ ảnh thật lần nào.
+Test vẫn dùng Ollama/ComfyUI giả.
+
+**Dùng thật lần đầu 2026-10-27** (`/app`, laptop RTX 3050, 19 lượt chat + 2 ảnh — TESTLOG): chat ~4 s/câu, 14,5
+token/giây; ảnh 40–99 s. Giữ vai khi bị dụ tốt. Tìm ra 6 lỗi, nặng nhất là trích fact lẫn nhân vật với người dùng (bảng dưới).
 
 **Số đo sau D13** (60 lượt chat): lời gọi LLM tóm tắt **54 → 18**; payload gửi vào
 LLM từ không giới hạn → tối đa 40 message.
@@ -119,6 +123,7 @@ LLM từ không giới hạn → tối đa 40 message.
 
 | Vấn đề | Chi tiết |
 |---|---|
+| **Trích fact lẫn nhân vật với người dùng** | Dùng thật 27/10 (TESTLOG): Pao lưu 13 fact, chỉ 6 đúng về người dùng; 7 là chuyện của chính Pao hoặc suy diễn sai, có `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó; thiếu con chó. Fact sai được đưa lại vào prompt. Tóm tắt hội thoại cũng lẫn ("Tên: Pao"). Hỏng trụ 2 — sửa trước khi đánh giá memory tiếp. |
 | **Chưa có relevance retrieval** | Fact extraction đã chạy, nhưng hiện đưa tối đa 24 fact gần nhất vào prompt. Chỉ cần FTS5/embedding khi dữ liệu thực tế đủ lớn để benchmark. |
 | **Character consistency chưa đủ** | Appearance tag chưa khoá được đúng một khuôn mặt. Cần ảnh gốc + seed/preset IP-Adapter trước; LoRA cần GPU rời. |
 | **Chưa có authentication** | Dữ liệu phân tách bằng `user_id`, nhưng đây chưa phải đăng nhập. An toàn khi chỉ bind localhost; không được mở Internet như hiện tại. |
@@ -153,6 +158,9 @@ là đầu vào cho hồ sơ máy của D17 (video ngắn từ ảnh persona, ch
 Chạy tối thiểu 20–30 lượt thật với model local để đo tỷ lệ fact đúng/sai/trùng,
 thời gian background extraction và tác động RAM. Chỉ thêm FTS5/embedding nếu 24
 fact gần nhất làm prompt nhiễu hoặc bỏ sót fact liên quan.
+
+Lượt đầu đã chạy 27/10 (19 lượt chat, TESTLOG): Pao 6/13 fact đúng, Su 5/7. Việc kế tiếp là sửa prompt trích fact (chỉ điều
+về người dùng, bộ khoá cố định) rồi chạy lại đúng kịch bản đó để so.
 
 ### 2. Character consistency khả thi trên máy hiện tại
 

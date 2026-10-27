@@ -16,6 +16,7 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 - AGENTS mục 4: chạy mọi `project/test_*.py` (hoặc `E:\duan\_vscode\KIEM-THU-DU-AN.cmd`) thay vì liệt kê tay sáu file; ghi `test_auto_outfit.py` là công cụ thử tay. RUNBOOK: chạy tay Ollama trên ổ rời (`OLLAMA_HOST`/`OLLAMA_MODELS`/`OLLAMA_URL`), ghi `qwen2.5vl` chưa có trên ổ rời.
 - PRODUCT_ROADMAP đánh dấu đã làm: P2.3 (D19), P3.1 và P3.3 (D20), P3.4 (D21), P3.5 (D22). STATE: thêm lần kiểm thử Windows 26/10 (15/15 đạt), chuyển mục Wan 2.2 vào bảng nợ kỹ thuật.
 - Nhánh `review-fixes` đã commit (`ff6dade`) và đẩy lên GitHub `Banhpao/test` — commit đầu tiên kể từ 21/8.
+- Dùng thật lần đầu qua `/app` (19 lượt chat + 2 ảnh SD1.5 — lần đầu vẽ thật trên RTX 3050): kết quả và 6 lỗi tìm thấy ghi ở TESTLOG 27/10; STATE thêm "Trích fact lẫn nhân vật với người dùng" vào bảng chặn hướng sản phẩm; MAY.md ghi số đo ảnh. Không đổi mã.
 
 ---
 

@@ -12,6 +12,60 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
+## 2026-10-27 — NVIDIA GeForce RTX 3050 Laptop GPU 4 GB, RAM 31.7 GiB — lần đầu dùng thật `/app` (chat + vẽ ảnh)
+
+**Phần cứng**
+- Như mục 26/10 bên dưới ([`MAY.md`](MAY.md)).
+
+**Cấu hình chạy**
+- Mở bằng `MO-PAOCAKE.cmd`: Ollama trên ổ rời cổng 11435, chat `qwen3:4b-instruct` (D24), dịch/tóm tắt tự dò ra `qwen2.5:3b`;
+  ComfyUI `--lowvram`; checkpoint `anythingAnd_anythingAndEverything.safetensors`; ảnh mức "Tốt nhất (50 steps)", không upscale, 512x768.
+- Không đổi biến môi trường. Dữ liệu trước khi thử (DB gần như trống) sao lưu ở
+  `E:\duan\_backup_claude\paocake-data-truoc-thu-app-2026-10-27.zip`.
+- Gõ qua `/app` trong trình duyệt tích hợp của Claude; khung hẹp nên ban đầu là bố cục điện thoại.
+- Người dùng giả "Tuấn": kỹ sư điện tử ở Đà Nẵng, thích cà phê sữa đá, nuôi chó tên Bơ. Pao 14 lượt, Su 7 lượt;
+  có câu dụ nhận AI, dụ liệt kê, hỏi tiếng Anh, hỏi lại trí nhớ; 2 ảnh xin trong khung chat.
+
+**Kết quả** (số từ `GET /api/stats`; chat gồm cả 1 lượt ngày 26/10)
+| Hạng mục | Kết quả | Thời gian | Ghi chú |
+|---|---|---|---|
+| Chat `qwen3:4b-instruct` | 20/20 ok | cả lượt trung vị 4,3 s (3,4–34,5); chữ đầu trung vị 0,9 s; 14,5 token/giây | `reloads` = 5, xem Kết luận |
+| text2img SD1.5 qua `/app` (2 ảnh) | 2/2 ok — **lần đầu vẽ thật trên máy này** | ComfyUI 34–72 s; cả lượt 40–99 s; dịch prompt 4,6–26 s | ảnh ở `data/images/`, có trong bộ sưu tập |
+| Giữ vai khi bị dụ (AI / liệt kê / tiếng Anh) | Pao 3/3, Su 2/2 | | Su chưa thử tiếng Anh |
+| Nhớ trong cùng hội thoại | Pao: tên, nghề, nơi ở đúng; đồ uống và con chó "không biết". Su: đủ tên, đồ uống, con chó | | |
+| Trích fact (`memory_facts`) | Pao: 6/13 đúng về người dùng, 7 sai; **thiếu con chó Bơ**. Su: 5/7 đúng, 2 rác | chạy ngầm sau mỗi 12 tin | xem lỗi 4 |
+
+**Lỗi gặp phải**
+1. **Bộ định tuyến:** câu hỏi "Pao đang vẽ gì vậy?" bị hiểu là lệnh vẽ ảnh và vẽ luôn. Có chữ "vẽ" là đủ, kể cả câu hỏi.
+2. **Đang vẽ ảnh thì Enter không gửi và không báo gì.** Chữ gõ thêm nằm lại trong ô; tin sau còn bị chèn vào giữa tin trước.
+3. **Bảng "… nhớ về bạn" không tự làm mới** khi fact được trích ngầm (Su có 7 fact trong DB, bảng vẫn ghi "chưa ghi nhớ
+   điều gì" tới khi tải lại trang). Nhãn hiện thẳng khoá tiếng Anh (`memory commitment`, `pet`, `relationship`).
+4. **Trích fact lẫn nhân vật với người dùng** (Pao): lưu cả chuyện của Pao như `interest: vẽ mưa đêm và mèo hoang`,
+   `goal: hoàn thành bài vẽ deadline`, `event: mưa to tại Tokyo`; `honorific: Pao`; và một fact sai có hại
+   `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` — trong khi người dùng nuôi chó. Tóm tắt hội thoại cũng lẫn:
+   "Tên: Pao", "Cách xưng hô: Pao - B-boys". Su có `memory_commitment` và `relationship: xưng hô: Chào Su` (rác).
+5. **Pao lặp "B-boys."** ở cuối 9/13 câu trả lời — bản méo của "B-baka" trong few-shot (`personas.py`). Câu đầu còn tự
+   xưng "Mình". (Chêm "Baka/Urusai" và đổi sang "tớ" khi thật lòng là đúng hồ sơ nhân vật.)
+6. **Prompt ảnh sau khi dịch:** ảnh Pao có tag `1pao` (lẽ ra `1girl`) và bối cảnh "Chinese ink art studio" (Pao học ở
+   Tokyo). Ảnh Pao cầm cọ đưa lên miệng chứ không đang vẽ; ảnh Su không thấy đang viết. Ảnh gửi vào hội thoại không kèm
+   câu nào của nhân vật — chú thích là chính câu xin của người dùng.
+
+**Kết luận / cần đổi gì trong code** (chưa sửa — chờ chủ dự án chọn)
+- Ưu tiên cao nhất là lỗi 4: hỏng đúng trụ 2 "trò chuyện có trí nhớ". Prompt trích fact phải chỉ lấy điều **về người dùng**,
+  giới hạn bộ khoá, và không lưu suy diễn kiểu `boundary`. Fact sai đang được đưa ngược vào prompt nên có thể làm nhân vật
+  "quên" con chó.
+- Lỗi 1 và 2 làm hỏng trải nghiệm ngay lần đầu dùng; lỗi 3 làm người dùng tưởng tính năng trí nhớ không chạy.
+- Tốc độ chat chấp nhận được (~4 s/câu). Vẽ ảnh 40–99 s ở mức "Tốt nhất"; chưa thử các mức thấp hơn.
+- `reloads` 5/20 lượt, đọc từng dòng `data/perf.jsonl`: 2 lần khởi động lạnh (26/10 và 27/10, 22–30 s); 1 lần ngay sau
+  ảnh đầu (13:30, chờ chữ đầu 9 s — D16 nhả VRAM); và **2 lần giữa lúc chat thuần** (13:33 chờ 16 s, 13:34 chờ 32 s).
+  Khả năng cao do **tóm tắt hội thoại**: `summarize_conversation()` gọi `get_translate_model()` → `qwen2.5:3b`, nên Ollama đổi
+  model qua lại trên GPU 4 GB — đúng hệ quả D24 dặn theo dõi. Khớp với số liệu: hội thoại Pao (29 tin) có `memory_summary`
+  và 2 lần nạp lại; hội thoại Su (15 tin) không có tóm tắt và không lần nào. (Trích fact dùng chính `OLLAMA_MODEL` cùng
+  `num_ctx` nên không gây nạp lại.) Chưa kiểm bằng log Ollama. Một lượt chờ 32 s là dễ thấy; đáng thử
+  `YUMEAI_TRANSLATE_MODEL=qwen3:4b-instruct` sau khi đo chất lượng dịch prompt ảnh của qwen3.
+
+---
+
 ## 2026-10-26 — NVIDIA GeForce RTX 3050 Laptop GPU 4096 MiB, RAM 31.7 GiB — so sánh model chat (bench_chat)
 
 **Phần cứng**

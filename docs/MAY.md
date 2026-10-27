@@ -36,7 +36,8 @@ Nguồn số: [`TESTLOG.md`](TESTLOG.md) mục 2026-10-26 và nhật ký `E:\dua
 - **Chỉ một job ComfyUI cùng lúc** (Resource Guard, `runtime.py`).
 - **Không SDXL, không train LoRA** trên máy này: `get_checkpoint_model()` vẫn lọc SDXL; train LoRA
   cần ~8–12 GB VRAM thật.
-- **Chưa đo trên máy này:** vẽ ảnh thật (SD 1.5, Flux Kontext), tốc độ đường REST `/app`, video Wan 2.2.
+- **Đã đo 27/10 qua `/app`:** chat ~4 s/câu (14,5 token/giây); SD 1.5 mức "Tốt nhất" (50 steps, 512x768) 40–99 s/ảnh,
+  trong đó ComfyUI 34–72 s (TESTLOG). **Chưa đo:** Flux Kontext, các mức chất lượng thấp hơn, video Wan 2.2.
   Số Flux Kontext ~400 giây/ảnh trong TESTLOG là của máy Radeon cũ, không áp cho máy này.
 - **Model vision cho pipeline đổi đồ** (`qwen2.5vl`, RUNBOOK) **chưa có** trong Ollama trên ổ rời.
 
