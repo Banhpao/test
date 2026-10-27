@@ -48,8 +48,16 @@ class YumeDatabase:
         finally:
             conn.close()
 
-    def initialize(self, personas: Mapping[str, dict] | None = None) -> None:
-        """Tạo schema idempotent và đồng bộ các persona dựng sẵn."""
+    def initialize(
+        self,
+        personas: Mapping[str, dict] | None = None,
+        renamed_ids: Mapping[str, str] | None = None,
+    ) -> None:
+        """Tạo schema idempotent và đồng bộ các persona dựng sẵn.
+
+        renamed_ids: {id cũ: id mới} của nhân vật đã đổi tên (PERSONA_ID_ALIASES).
+        Dữ liệu gắn id cũ được chuyển sang id mới TRƯỚC khi đồng bộ persona.
+        """
         with self._connect() as conn, conn:
             # WAL cho phép UI đọc lịch sử trong lúc stream đang ghi tin nhắn mới.
             conn.execute("PRAGMA journal_mode = WAL")
@@ -193,6 +201,15 @@ class YumeDatabase:
             )
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
+        # Đổi tên chạy trước sync_personas: sync chỉ upsert, không bao giờ xoá, nên
+        # nếu chạy sau thì dòng nhân vật cũ vẫn nằm lại và giữ toàn bộ lịch sử.
+        if renamed_ids:
+            new_names = {
+                new_id: ((personas or {}).get(new_id) or {}).get("name")
+                for new_id in renamed_ids.values()
+            }
+            self.rename_characters(renamed_ids, new_names=new_names)
+
         if personas:
             self.sync_personas(personas)
 
@@ -218,6 +235,117 @@ class YumeDatabase:
                         now,
                     ),
                 )
+
+    def rename_characters(
+        self,
+        renames: Mapping[str, str],
+        *,
+        new_names: Mapping[str, str | None] | None = None,
+    ) -> Path | None:
+        """Chuyển hội thoại, trí nhớ và ảnh của mỗi nhân vật id cũ sang id mới.
+
+        renames: {id cũ: id mới}. new_names: {id mới: tên mới}, dùng để đổi tiêu đề
+        hội thoại tự sinh. Trả đường dẫn bản sao lưu nếu có chuyển dữ liệu; None nếu
+        không có gì để làm (DB mới, hoặc đã chuyển từ lần trước — chạy lại vô hại).
+
+        Không UPDATE characters.id tại chỗ: khoá ngoại không có ON UPDATE CASCADE và
+        foreign_keys đang bật, nên đổi id cha trước sẽ bị chặn. Thứ tự an toàn là tạo
+        dòng cha mới → chuyển các bảng con → xoá dòng cha cũ. Mọi nhân vật đổi tên đi
+        chung MỘT bản sao lưu và MỘT transaction: mất điện giữa chừng thì DB vẫn
+        nguyên như trước, không có chuyện đổi được người này mà sót người kia.
+        """
+        pairs = [
+            ((old_id or "").strip(), (new_id or "").strip())
+            for old_id, new_id in renames.items()
+        ]
+        pairs = [(o, n) for o, n in pairs if o and n and o != n]
+        if not pairs:
+            return None
+        with self._connect() as conn:
+            old_names = {
+                row["id"]: row["name"]
+                for row in conn.execute(
+                    f"SELECT id, name FROM characters WHERE id IN ({','.join('?' * len(pairs))})",
+                    [o for o, _ in pairs],
+                ).fetchall()
+            }
+        pairs = [(o, n) for o, n in pairs if o in old_names]
+        if not pairs:
+            return None
+
+        # Sửa hàng loạt dữ liệu thật của người dùng → chụp bản sao trước đã.
+        label = "doi-ten-" + "-".join(f"{o}-thanh-{n}" for o, n in pairs)
+        backup_path = self._backup_before(label)
+        names = new_names or {}
+        with self._connect() as conn, conn:
+            for old_id, new_id in pairs:
+                self._move_character(
+                    conn, old_id, new_id,
+                    old_name=old_names[old_id], new_name=names.get(new_id),
+                )
+        return backup_path
+
+    @staticmethod
+    def _move_character(
+        conn: sqlite3.Connection,
+        old_id: str,
+        new_id: str,
+        *,
+        old_name: str,
+        new_name: str | None,
+    ) -> None:
+        """Một nhân vật trong rename_characters(); chạy bên trong transaction của nó."""
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO characters(id, name, persona_json, created_at, updated_at)
+            SELECT ?, name, persona_json, created_at, ? FROM characters WHERE id = ?
+            """,
+            (new_id, _utc_now(), old_id),
+        )
+        conn.execute(
+            "UPDATE conversations SET character_id = ? WHERE character_id = ?",
+            (new_id, old_id),
+        )
+        if new_name:
+            # Chỉ đổi tiêu đề tự sinh ("Trò chuyện với Yuki"); tiêu đề người dùng
+            # tự đặt thì giữ nguyên chữ của họ.
+            conn.execute(
+                """
+                UPDATE conversations SET title = ?
+                WHERE character_id = ? AND title = ?
+                """,
+                (f"Trò chuyện với {new_name}", new_id, f"Trò chuyện với {old_name}"),
+            )
+        # UNIQUE(user_id, character_id, fact_key): nếu id mới đã có fact cùng khoá
+        # thì giữ bản của id mới, bỏ bản cũ trùng khoá thay vì làm hỏng cả lần chuyển.
+        conn.execute(
+            "UPDATE OR IGNORE memory_facts SET character_id = ? WHERE character_id = ?",
+            (new_id, old_id),
+        )
+        conn.execute("DELETE FROM memory_facts WHERE character_id = ?", (old_id,))
+        conn.execute(
+            "UPDATE images SET character_id = ? WHERE character_id = ?",
+            (new_id, old_id),
+        )
+        conn.execute("DELETE FROM characters WHERE id = ?", (old_id,))
+
+    def _backup_before(self, label: str) -> Path | None:
+        """Sao lưu DB vào data/backups/ trước một thay đổi dữ liệu hàng loạt."""
+        if not self.path.exists():
+            return None
+        backup_dir = self.path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = backup_dir / f"truoc-{label}-{stamp}.db"
+        # Dùng backup API của sqlite chứ không copy file: DB chạy WAL, copy riêng file
+        # .db có thể thiếu những trang còn nằm trong file -wal.
+        with self._connect() as source:
+            copy = sqlite3.connect(str(target))
+            try:
+                source.backup(copy)
+            finally:
+                copy.close()
+        return target
 
     def ensure_user(self, user_id: str, display_name: str = "") -> dict:
         user_id = (user_id or "").strip()
@@ -369,24 +497,54 @@ class YumeDatabase:
             row = conn.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_dict(row) or {}
 
-    def list_messages(self, conversation_id: str, limit: int | None = None) -> list[dict]:
+    def list_messages(
+        self,
+        conversation_id: str,
+        limit: int | None = None,
+        *,
+        content_type: str | None = None,
+    ) -> list[dict]:
+        # content_type để lọc NGAY trong SQL: LIMIT áp lên cả message ảnh thì N message
+        # cuối có thể chứa ít text hơn số mà ngữ cảnh chat cần.
+        where = "conversation_id = ?"
+        params: list = [conversation_id]
+        if content_type is not None:
+            where += " AND content_type = ?"
+            params.append(content_type)
         with self._connect() as conn:
             if limit is not None and limit > 0:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM (
                         SELECT * FROM messages
-                        WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
+                        WHERE {where} ORDER BY id DESC LIMIT ?
                     ) ORDER BY id ASC
                     """,
-                    (conversation_id, int(limit)),
+                    (*params, int(limit)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC",
-                    (conversation_id,),
+                    f"SELECT * FROM messages WHERE {where} ORDER BY id ASC",
+                    params,
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_messages(
+        self,
+        conversation_id: str,
+        *,
+        content_type: str | None = None,
+    ) -> int:
+        where = "conversation_id = ?"
+        params: list = [conversation_id]
+        if content_type is not None:
+            where += " AND content_type = ?"
+            params.append(content_type)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM messages WHERE {where}", params
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def update_memory_summary(self, conversation_id: str, summary: str) -> None:
         with self._connect() as conn, conn:
@@ -609,3 +767,138 @@ class YumeDatabase:
                 params,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # ── Xoá và xuất dữ liệu (P3: người dùng phải xoá/xuất được dữ liệu của mình) ──
+
+    def get_image(self, image_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        return _row_dict(row)
+
+    def delete_image(self, image_id: str) -> dict | None:
+        """Xoá ảnh khỏi gallery và khỏi hội thoại đang chứa nó.
+
+        Trả dòng ảnh vừa xoá (kèm số tin nhắn ảnh đã gỡ), None nếu không có ảnh đó.
+        File PNG do tầng gọi xoá — tầng DB không biết thư mục ảnh nằm đâu.
+        Gỡ cả tin nhắn ảnh trỏ tới nó: để lại thì mở hội thoại ra là một khung ảnh hỏng.
+        """
+        with self._connect() as conn, conn:
+            row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+            if row is None:
+                return None
+            removed = 0
+            if row["conversation_id"]:
+                candidates = conn.execute(
+                    """
+                    SELECT id, content FROM messages
+                    WHERE conversation_id = ? AND content_type = 'image'
+                    """,
+                    (row["conversation_id"],),
+                ).fetchall()
+                for message in candidates:
+                    try:
+                        data = json.loads(message["content"])
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(data, dict) and data.get("image_id") == image_id:
+                        conn.execute("DELETE FROM messages WHERE id = ?", (message["id"],))
+                        removed += 1
+            conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        result = dict(row)
+        result["messages_removed"] = removed
+        return result
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Xoá hội thoại cùng mọi tin nhắn của nó.
+
+        Ảnh sinh trong hội thoại vẫn ở lại gallery (conversation_id → NULL): ảnh thuộc
+        về người dùng, không thuộc về hội thoại (D14). Muốn bỏ ảnh thì xoá từ gallery.
+        """
+        with self._connect() as conn, conn:
+            cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        return cursor.rowcount > 0
+
+    def _owned_image_clause(self, conn: sqlite3.Connection) -> str:
+        # Ảnh user_id = '' (từ trước migration v3, không suy ra được chủ) chỉ được coi là
+        # của người này khi DB chỉ có một người dùng — đúng như lúc migration gán chủ.
+        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        return "(user_id = ? OR user_id = '')" if users <= 1 else "user_id = ?"
+
+    def export_user(self, user_id: str) -> dict:
+        """Toàn bộ dữ liệu của một người dùng, dạng dict sẵn để json.dumps."""
+        with self._connect() as conn:
+            user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            conversations = [
+                dict(row) for row in conn.execute(
+                    """
+                    SELECT c.*, ch.name AS character_name FROM conversations c
+                    JOIN characters ch ON ch.id = c.character_id
+                    WHERE c.user_id = ? ORDER BY c.created_at
+                    """,
+                    (user_id,),
+                ).fetchall()
+            ]
+            for conversation in conversations:
+                conversation["messages"] = [
+                    dict(row) for row in conn.execute(
+                        """
+                        SELECT id, role, content, content_type, created_at FROM messages
+                        WHERE conversation_id = ? ORDER BY id
+                        """,
+                        (conversation["id"],),
+                    ).fetchall()
+                ]
+            facts = [
+                dict(row) for row in conn.execute(
+                    """
+                    SELECT character_id, fact_key, fact_value, confidence, created_at, updated_at
+                    FROM memory_facts WHERE user_id = ? ORDER BY character_id, fact_key
+                    """,
+                    (user_id,),
+                ).fetchall()
+            ]
+            images = [
+                dict(row) for row in conn.execute(
+                    f"SELECT * FROM images WHERE {self._owned_image_clause(conn)} ORDER BY created_at",
+                    (user_id,),
+                ).fetchall()
+            ]
+        return {
+            "user": _row_dict(user),
+            "conversations": conversations,
+            "memory_facts": facts,
+            "images": images,
+        }
+
+    def delete_user_data(self, user_id: str) -> dict:
+        """Xoá toàn bộ dữ liệu của một người dùng: hội thoại, tin nhắn, ký ức, ảnh, hồ sơ.
+
+        Trả số lượng đã xoá và danh sách file ảnh để tầng gọi xoá trên đĩa.
+        KHÔNG tự sao lưu: người dùng chủ động xoá thì phải là xoá thật. Sau khi xoá chạy
+        VACUUM, vì SQLite giữ nội dung dòng đã xoá trong trang trống tới lúc đó.
+        """
+        with self._connect() as conn, conn:
+            clause = self._owned_image_clause(conn)
+            images = conn.execute(
+                f"SELECT id, file_path FROM images WHERE {clause}", (user_id,)
+            ).fetchall()
+            conversations = conn.execute(
+                "SELECT COUNT(*) FROM conversations WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            facts = conn.execute(
+                "SELECT COUNT(*) FROM memory_facts WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            conn.execute(f"DELETE FROM images WHERE {clause}", (user_id,))
+            # messages theo hội thoại và memory_facts theo user đều ON DELETE CASCADE.
+            conn.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM memory_facts WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        with self._connect() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+        return {
+            "conversations": conversations,
+            "memory_facts": facts,
+            "images": len(images),
+            "image_files": [row["file_path"] for row in images],
+        }

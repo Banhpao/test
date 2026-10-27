@@ -22,7 +22,7 @@ chi phí API và dùng lại toàn bộ pipeline ảnh hiện có.
 
 ## Đã hoàn thành — nền móng sản phẩm
 
-- Persona Yuki/Hana, few-shot, chat streaming và router chat/tạo ảnh.
+- Persona Pao/Su (trước đây tên Yuki/Hana — D18), few-shot, chat streaming và router chat/tạo ảnh.
 - SQLite với schema `users`, `characters`, `conversations`, `messages`,
   `memory_facts`, `images`.
 - REST API tạo/liệt kê/mở conversation; server tự lưu user và assistant message.

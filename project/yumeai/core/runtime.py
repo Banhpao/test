@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from yumeai.core.config import COMFY_TIMEOUT_SEC
 from yumeai.services.comfy_service import submit_workflow as _raw_submit_workflow
 from yumeai.services.comfy_service import poll_and_download as _raw_poll_and_download
+from yumeai.services.ollama_service import unload_ollama_models
 
 try:
     from filelock import FileLock, Timeout as _FileLockTimeout
@@ -211,6 +212,10 @@ def run_comfy_job(workflow, progress=None, start_pct=0.3, timeout=None,
     if timeout is None:
         timeout = COMFY_TIMEOUT_SEC
     with comfy_job(label):
+        # Nhả model Ollama khỏi VRAM NGAY TRƯỚC khi gửi job (đã giữ slot nên không có
+        # job ComfyUI nào khác đang chạy). Không có bước này thì model dịch/enrich vừa
+        # dùng còn nằm trong 4GB VRAM thêm 5 phút. Tắt bằng YUMEAI_VRAM_HANDOFF=0.
+        unload_ollama_models()
         prompt_id = _raw_submit_workflow(workflow)
         return _raw_poll_and_download(prompt_id, progress, start_pct, timeout)
 

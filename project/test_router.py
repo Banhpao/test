@@ -150,7 +150,21 @@ cleaned = clean_history(history)
 check("số message giữ lại (bỏ 1 message trạng thái ✅)", len(cleaned), 4)
 check("lượt có ảnh KHÔNG bị mất", cleaned[2]["content"], "em thấy ảnh này sao?")
 
-msgs = build_chat_messages(build_system_prompt(PERSONAS["yuki"]), history, "nhớ anh không?")
+# Gradio 6 trả content dạng list khối {"type": "text"} — bản cũ bỏ sạch các lượt này.
+g6_history = [
+    {"role": "user", "content": [{"type": "text", "text": "chào em"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "H-hừ... chào anh."}]},
+    {"role": "user", "content": [{"type": "text", "text": "📎 [ảnh hiện tại]\nem thấy ảnh này sao?"},
+                                 {"type": "file", "file": {"path": "x.png"}}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "✅ Xong!\n🧠 Task: edit_clothes"}]},
+]
+check("Gradio 6: content dạng list khối text vẫn giữ được",
+      clean_history(g6_history),
+      [{"role": "user", "content": "chào em"},
+       {"role": "assistant", "content": "H-hừ... chào anh."},
+       {"role": "user", "content": "em thấy ảnh này sao?"}])
+
+msgs = build_chat_messages(build_system_prompt(PERSONAS["pao"]), history, "nhớ anh không?")
 check("message[0] là system", msgs[0]["role"], "system")
 check("message cuối là câu mới", msgs[-1]["content"], "nhớ anh không?")
 check("tổng số message = 1 system + 4 lịch sử + 1 mới", len(msgs), 6)
@@ -170,24 +184,24 @@ for pid, p in PERSONAS.items():
     check(f"persona {pid!r} đủ field", all(k in p for k in REQUIRED), True)
     check(f"persona {pid!r} có few-shot", len(p["examples"]) >= 3, True)
 
-yuki = PERSONAS["yuki"]
-sp = build_system_prompt(yuki)
+pao = PERSONAS["pao"]
+sp = build_system_prompt(pao)
 check("system prompt dài hơn hẳn bản cũ (4 dòng)", len(sp) > 800, True)
-for must in ("TÍNH CÁCH", "CÁCH NÓI CHUYỆN", "NGUYÊN TẮC BẮT BUỘC", "Yuki"):
+for must in ("TÍNH CÁCH", "CÁCH NÓI CHUYỆN", "NGUYÊN TẮC BẮT BUỘC", "Pao"):
     check(f"system prompt có mục {must!r}", must in sp, True)
 check("có ràng buộc chống lộ là AI", "không nói mình là AI" in sp.lower()
       or "TUYỆT ĐỐI không nói mình là AI" in sp, True)
 
-sp_mem = build_system_prompt(yuki, memory_summary="- Tên là Cenk\n- Đang học lập trình")
+sp_mem = build_system_prompt(pao, memory_summary="- Tên là Cenk\n- Đang học lập trình")
 check("trí nhớ được nhét vào system prompt", "Cenk" in sp_mem, True)
 check("không có trí nhớ thì không thêm mục thừa",
       "ĐÃ BIẾT VỀ NGƯỜI NÀY" not in sp, True)
 
-fs = build_fewshot_messages(yuki)
+fs = build_fewshot_messages(pao)
 check("few-shot ra cặp user/assistant", len(fs) >= 6 and len(fs) % 2 == 0, True)
 check("few-shot bắt đầu bằng user", fs[0]["role"], "user")
 
-msgs = build_persona_messages(yuki, [], "chào em", memory_summary="")
+msgs = build_persona_messages(pao, [], "chào em", memory_summary="")
 check("message[0] là system", msgs[0]["role"], "system")
 check("message cuối là câu vừa gõ", msgs[-1]["content"], "chào em")
 check("có chèn few-shot vào giữa", len(msgs) > 2, True)
@@ -322,6 +336,181 @@ try:
 except ResourceBusyError:
     after_nested = False
 check("thoát khỏi lồng thì slot được nhả hết", after_nested, True)
+
+# ══════════════════════════════════════════════════════════════════════════
+section("13. Chat không ảnh: KHÔNG gọi planner LLM trừ khi câu nhắc tới ảnh")
+# ══════════════════════════════════════════════════════════════════════════
+import os as _os
+import subprocess as _subprocess
+from unittest.mock import patch as _patch
+
+from yumeai.core import config as _config
+from yumeai.core import prompt_router as _router
+from yumeai.core import runtime as _runtime
+from yumeai.core.chat_context import chat_options as _chat_options
+from yumeai.services import comfy_service as _comfy
+
+
+class _FakeResp:
+    def __init__(self, data=None, status=200):
+        self._data, self.status_code = data or {}, status
+
+    def json(self):
+        return self._data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeClient:
+    """httpx.Client giả: ghi lại mọi request, trả lời theo bảng `routes`."""
+    calls = []
+    routes = {}
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def _answer(self, method, url, json=None):
+        _FakeClient.calls.append((method, url, json))
+        for suffix, resp in _FakeClient.routes.items():
+            if url.endswith(suffix):
+                if isinstance(resp, Exception):
+                    raise resp
+                return resp
+        return _FakeResp({}, 404)
+
+    def get(self, url, **kw):
+        return self._answer("GET", url)
+
+    def post(self, url, json=None, **kw):
+        return self._answer("POST", url, json)
+
+
+def _fake_http(routes):
+    _FakeClient.calls = []
+    _FakeClient.routes = routes
+    return _patch("httpx.Client", _FakeClient)
+
+
+# Bản cũ: 9/10 câu chat thường ra confidence="low" → mỗi lượt chờ planner LLM (25s).
+for t in CHAT_CASES + ["ừ", "haha", "anh nhớ em", "hình như em buồn",
+                       "chuyện đó ảnh hưởng tới anh nhiều lắm", "tình hình công việc sao rồi"]:
+    check(f"không ảnh, không cần planner: {t!r}",
+          rule_plan_request(t, has_image=False).confidence, "high")
+for t in ["em có ảnh nào đẹp không", "hôm qua chụp ở đâu thế"]:
+    check(f"có nhắc ảnh → vẫn nhờ planner soi lại: {t!r}",
+          rule_plan_request(t, has_image=False).confidence, "low")
+
+_planner_calls = []
+with _patch.object(_router, "_llm_plan_request",
+                   side_effect=lambda **kw: _planner_calls.append(kw) or None):
+    for t in ["anh nhớ em", "ừ", "haha", "em ăn cơm chưa"]:
+        plan_request(t, has_image=False, use_llm_fallback=True)
+check("plan_request: chat thường không gọi planner lần nào", len(_planner_calls), 0)
+
+with _fake_http({"/api/chat": _FakeResp({"message": {"content": '{"task": "chat"}'}})}):
+    _router._llm_plan_request("em có ảnh nào đẹp không", False, False)
+_payload = _FakeClient.calls[-1][2]
+check("planner gửi think=false", _payload.get("think"), False)
+check("planner vẫn ép format json", _payload.get("format"), "json")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+section("14. Model: mặc định khớp docs, dò cỡ model bằng regex, env override")
+# ══════════════════════════════════════════════════════════════════════════
+_env = {k: v for k, v in _os.environ.items()
+        if k not in ("OLLAMA_MODEL", "YUMEAI_VISION_MODEL", "YUMEAI_TRANSLATE_MODEL")}
+_out = _subprocess.run(
+    [sys.executable, "-c",
+     "from yumeai.core.config import OLLAMA_MODEL as m; print(m)"],
+    capture_output=True, text=True, env=_env, cwd=_os.path.dirname(_os.path.abspath(__file__)),
+    check=False,
+)
+check("model chat mặc định = qwen3:4b-instruct (như env.example/RUNBOOK, D24)", _out.stdout.strip(),
+      "qwen3:4b-instruct")
+
+for name, want in [
+    ("llama3.2:1b", True), ("qwen2.5:0.5b", True), ("qwen2.5:1.5b", True),
+    ("deepseek-r1:1.5b", True), ("tinyllama", True), ("smollm2:135m", True),
+    ("llama3.2-vision:11b", False),    # bản cũ: "1b" in name → bị coi là tí hon
+    ("qwen2.5:3b", False), ("qwen2.5:14b", False), ("llama3.1:8b", False),
+    ("gemma2:2b", False), ("qwen2.5:7b-instruct-q4_K_M", False), ("qwen3:4b-instruct", False),
+]:
+    check(f"is_tiny_model({name!r})", ollama_service.is_tiny_model(name), want)
+
+with _patch.object(ollama_service, "OLLAMA_TRANSLATE_MODEL", "my-translate:7b"), \
+        _fake_http({}):
+    check("YUMEAI_TRANSLATE_MODEL thắng việc tự dò", ollama_service.get_translate_model(),
+          "my-translate:7b")
+    check("đã chỉ định model dịch thì không hỏi /api/tags", _FakeClient.calls, [])
+
+with _patch.object(ollama_service, "OLLAMA_TRANSLATE_MODEL", "qwen2.5:3b"), \
+        _fake_http({"/api/chat": _FakeResp({"message": {"content": "red ao dai"}})}):
+    ollama_service.translate_vi_en_ex("áo dài đỏ")
+check("dịch gửi think=false", _FakeClient.calls[-1][2].get("think"), False)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+section("15. VRAM: Ollama và ComfyUI nhường GPU 4GB cho nhau")
+# ══════════════════════════════════════════════════════════════════════════
+_ps = _FakeResp({"models": [
+    {"name": "qwen2.5:3b", "model": "qwen2.5:3b", "size_vram": 2_000_000_000},
+    {"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest", "size_vram": 0},
+]})
+with _patch.object(ollama_service, "VRAM_HANDOFF", True), \
+        _fake_http({"/api/ps": _ps, "/api/generate": _FakeResp({"done_reason": "unload"})}):
+    _unloaded = ollama_service.unload_ollama_models()
+_gen = [c for c in _FakeClient.calls if c[1].endswith("/api/generate")]
+check("chỉ nhả model đang nằm trên GPU (size_vram > 0)", _unloaded, ["qwen2.5:3b"])
+check("nhả bằng keep_alive=0", _gen and _gen[0][2], {"model": "qwen2.5:3b", "keep_alive": 0})
+
+with _patch.object(ollama_service, "VRAM_HANDOFF", False), _fake_http({"/api/ps": _ps}):
+    check("YUMEAI_VRAM_HANDOFF=0 → không đụng tới Ollama", ollama_service.unload_ollama_models(), [])
+    check("YUMEAI_VRAM_HANDOFF=0 → không có request nào", _FakeClient.calls, [])
+
+with _patch.object(ollama_service, "VRAM_HANDOFF", True), \
+        _fake_http({"/api/ps": RuntimeError("Ollama tắt")}):
+    check("Ollama tắt → không ném lỗi, không chặn job vẽ", ollama_service.unload_ollama_models(), [])
+
+with _patch.object(_comfy, "VRAM_HANDOFF", True), _patch.object(_comfy, "OLLAMA_NUM_GPU", None), \
+        _fake_http({"/free": _FakeResp({})}):
+    check("free_comfy_vram → True", _comfy.free_comfy_vram(), True)
+check("ComfyUI /free nhận đúng payload",
+      _FakeClient.calls[-1][1:], (f"{_comfy.COMFY_URL}/free", {"unload_models": True, "free_memory": True}))
+
+with _patch.object(_comfy, "VRAM_HANDOFF", True), _patch.object(_comfy, "OLLAMA_NUM_GPU", 0), \
+        _fake_http({"/free": _FakeResp({})}):
+    _comfy.free_comfy_vram()
+    check("Ollama chạy CPU (num_gpu=0) → không cần đuổi ComfyUI", _FakeClient.calls, [])
+
+with _patch.object(_comfy, "VRAM_HANDOFF", True), _patch.object(_comfy, "OLLAMA_NUM_GPU", None), \
+        _fake_http({"/free": RuntimeError("ComfyUI tắt")}):
+    check("ComfyUI tắt → free_comfy_vram không ném lỗi", _comfy.free_comfy_vram(), False)
+
+_order = []
+with _patch.object(_runtime, "unload_ollama_models", lambda: _order.append("unload")), \
+        _patch.object(_runtime, "_raw_submit_workflow", lambda wf: _order.append("submit") or "pid"), \
+        _patch.object(_runtime, "_raw_poll_and_download",
+                      lambda *a, **kw: _order.append("poll") or "img"):
+    _img = _runtime.run_comfy_job({"1": {}}, None, 0.0, 5)
+check("run_comfy_job: nhả Ollama TRƯỚC khi gửi job", _order, ["unload", "submit", "poll"])
+
+with _patch.object(_config, "OLLAMA_NUM_GPU", None):
+    check("YUMEAI_OLLAMA_NUM_GPU trống → không gửi num_gpu", "num_gpu" in _chat_options(), False)
+with _patch.object(_config, "OLLAMA_NUM_GPU", 0):
+    check("YUMEAI_OLLAMA_NUM_GPU=0 → chat gửi num_gpu=0", _chat_options().get("num_gpu"), 0)
+    with _fake_http({"/api/chat": _FakeResp({"message": {"content": '{"task": "chat"}'}})}):
+        ollama_service._ollama_chat("m", "sys", "user", retries=0)
+        _router._llm_plan_request("em có ảnh nào đẹp không", False, False)
+    check("num_gpu đi kèm MỌI lời gọi (khác nhau là Ollama nạp lại model)",
+          [c[2]["options"].get("num_gpu") for c in _FakeClient.calls], [0, 0])
 
 # ══════════════════════════════════════════════════════════════════════════
 print(f"\n{'═' * 62}")

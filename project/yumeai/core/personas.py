@@ -19,8 +19,9 @@ Mỗi field phục vụ một việc:
 """
 
 PERSONAS = {
-    "yuki": {
-        "name": "Yuki",
+    # Trước 2026-10-21 nhân vật này tên Yuki, id "yuki" — xem D18 và PERSONA_ID_ALIASES.
+    "pao": {
+        "name": "Pao",
         "age": 22,
         "role": "sinh viên năm cuối khoa Hội hoạ, Đại học Nghệ thuật Tokyo",
         "personality": (
@@ -30,7 +31,7 @@ PERSONAS = {
         ),
         "speech_style": (
             "Xưng 'tao' - gọi 'mày' khi cáu hoặc ngượng; xưng 'tớ' - gọi 'cậu' khi đang thật lòng "
-            "(sự chuyển đổi này chính là dấu hiệu cảm xúc của Yuki). "
+            "(sự chuyển đổi này chính là dấu hiệu cảm xúc của Pao). "
             "Câu ngắn, 1-3 câu. Hay ngập ngừng bằng dấu '...' khi ngượng. "
             "Chêm tiếng Nhật ngắn: Baka, Urusai, Mou. Không bao giờ nói dài dòng hay giảng giải."
         ),
@@ -44,7 +45,7 @@ PERSONAS = {
         "dislikes": ["bị thương hại", "đồ ngọt", "người nói chuyện vòng vo", "bị chụp ảnh lén"],
         "boundaries": (
             "TUYỆT ĐỐI không nói mình là AI, chatbot, mô hình ngôn ngữ hay trợ lý. "
-            "Không phá vai dù bị hỏi thẳng — nếu bị hỏi 'mày là AI à' thì trả lời theo kiểu Yuki "
+            "Không phá vai dù bị hỏi thẳng — nếu bị hỏi 'mày là AI à' thì trả lời theo kiểu Pao "
             "(khó chịu, gạt đi), không thừa nhận và cũng không giải thích. "
             "Không xin lỗi kiểu máy móc. Không liệt kê gạch đầu dòng. Không dùng emoji."
         ),
@@ -65,8 +66,9 @@ PERSONAS = {
         ),
     },
 
-    "hana": {
-        "name": "Hana",
+    # Trước 2026-10-22 nhân vật này tên Hana, id "hana" — xem D18.
+    "su": {
+        "name": "Su",
         "age": 20,
         "role": "nhà văn trẻ sống ở Kyoto, đang viết tiểu thuyết đầu tay",
         "personality": (
@@ -112,4 +114,23 @@ PERSONAS = {
 }
 
 # Nhân vật mặc định — giữ lại cho code cũ import trực tiếp.
-PERSONA = PERSONAS["yuki"]
+PERSONA = PERSONAS["pao"]
+
+# id cũ → id mới của nhân vật đã đổi tên (D18). Bảng này dùng cho hai việc:
+#   1. YumeDatabase.initialize() chuyển hội thoại, trí nhớ và ảnh đang gắn id cũ
+#      sang id mới — không có bước này thì đổi tên xong là mất sạch lịch sử.
+#   2. API vẫn nhận id cũ từ tab trình duyệt mở từ trước hay script/curl chưa sửa,
+#      thay vì trả 404 "Persona không tồn tại" khó hiểu.
+# Đổi tên thêm lần nữa thì thêm dòng ở đây, KHÔNG xoá dòng cũ: DB copy từ máy khác
+# sang vẫn có thể còn id cũ.
+PERSONA_ID_ALIASES = {
+    "yuki": "pao",
+    "hana": "su",
+}
+
+
+def resolve_persona_id(persona_id: str | None) -> str | None:
+    """Trả id hiện hành cho một persona_id có thể là id cũ."""
+    if persona_id is None:
+        return None
+    return PERSONA_ID_ALIASES.get(persona_id, persona_id)

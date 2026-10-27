@@ -7,7 +7,58 @@ import os
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 COMFY_URL = os.getenv("COMFY_URL", "http://127.0.0.1:8188")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+# Mặc định trùng env.example + RUNBOOK. Bản cũ để "llama3.2:1b" — chính model mà
+# STATE.md ghi là chặn hướng sản phẩm (giữ vai kém) — nên ai quên đặt OLLAMA_MODEL
+# là chạy luôn model quá nhỏ, kể cả cho JSON planner và fact extractor.
+# Từ 2026-10-26 (D24): qwen3:4b-instruct thay qwen2.5:3b — bench_chat trên máy thật cho giữ vai
+# 23/24 so với 17/24, nhớ đúng 3/4 so với 0/4 (TESTLOG); đổi lại chậm hơn ~4 lần trên GPU 4 GB.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b-instruct")
+# Ép model vision / model dịch thay vì để app tự dò theo tên (để trống = tự dò như cũ).
+#   $env:YUMEAI_VISION_MODEL="qwen2.5vl:3b"
+#   $env:YUMEAI_TRANSLATE_MODEL="qwen2.5:3b"
+OLLAMA_VISION_MODEL = os.getenv("YUMEAI_VISION_MODEL", "").strip()
+OLLAMA_TRANSLATE_MODEL = os.getenv("YUMEAI_TRANSLATE_MODEL", "").strip()
+
+
+def _optional_int_env(name: str):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"⚠️ {name}={raw!r} không phải số nguyên → bỏ qua, dùng mặc định của Ollama")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# VRAM — Ollama và ComfyUI dùng CHUNG một GPU 4GB (RTX 3050 Laptop)
+# ══════════════════════════════════════════════════════════════════════════
+# Số layer Ollama đẩy lên GPU, gửi kèm MỌI lời gọi Ollama dưới dạng options.num_gpu.
+# Để trống = Ollama tự quyết (hành vi cũ). "0" = Ollama chạy hẳn trên CPU/RAM, nhường
+# trọn VRAM cho ComfyUI. Phải giống nhau ở mọi lời gọi: num_gpu khác nhau giữa hai
+# lời gọi cùng model là Ollama nạp lại model.
+#   $env:YUMEAI_OLLAMA_NUM_GPU="0"
+OLLAMA_NUM_GPU = _optional_int_env("YUMEAI_OLLAMA_NUM_GPU")
+
+# Nhường VRAM qua lại: trước mỗi job ComfyUI nhờ Ollama nhả model (keep_alive=0),
+# trước mỗi lời gọi vision nhờ ComfyUI /free. Thiết kế cũ giả định Ollama chạy CPU
+# (iGPU Radeon 680M); trên GPU NVIDIA Ollama giữ model trong VRAM 5 phút sau mỗi
+# lời gọi nên job ComfyUI ngay sau đó phải tranh 4GB với nó. Tắt: "0".
+#   $env:YUMEAI_VRAM_HANDOFF="0"
+VRAM_HANDOFF = os.getenv("YUMEAI_VRAM_HANDOFF", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def ollama_options(options: dict) -> dict:
+    """Thêm options.num_gpu (nếu đặt YUMEAI_OLLAMA_NUM_GPU) vào options của lời gọi Ollama.
+
+    Nằm ở config.py chứ không ở ollama_service.py vì chat_context/prompt_router/
+    memory_service đều cần mà không được kéo theo ollama_service (test thay module đó
+    bằng bản giả).
+    """
+    if OLLAMA_NUM_GPU is None:
+        return options
+    return {**options, "num_gpu": OLLAMA_NUM_GPU}
 
 # Dữ liệu sản phẩm (hội thoại, trí nhớ, gallery) nằm ngoài source code để có thể
 # backup/copy độc lập. SQLite là chủ đích: dự án local một người dùng không cần

@@ -3,857 +3,2037 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>YumeAI</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<!--
+  Giao diện web tại /app — "Ngân hà hồng".
+  Một trang, bốn màn: Trò chuyện · Tạo ảnh · Bộ sưu tập · Chọn nhân vật (đổi bằng #hash
+  để nút Back của trình duyệt vẫn dùng được).
+
+  Vì sao viết tay, không framework: /app được main.py phục vụ như một file tĩnh, chạy
+  offline trên máy người dùng — không có bước build, không có node_modules để hỏng.
+
+  Quy tắc khi sửa:
+  - Chỉ gọi API main.py đang có (xem danh sách endpoint ở GET /). Nút nào backend chưa
+    làm được thì KHÔNG vẽ ra — nút bấm không chạy tệ hơn không có nút.
+  - Mọi chữ từ máy chủ/LLM/người dùng vào DOM bằng textContent (hàm h()), không qua
+    innerHTML. innerHTML chỉ dùng cho bộ icon SVG hằng số trong ICON_PATHS.
+  - Màu: nền tối đủ để dùng trong phòng tắt đèn; chữ đã kiểm tương phản ≥ 4.5:1.
+    Đổi màu thì kiểm lại.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Playfair+Display:ital,wght@0,600;1,500;1,600&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0c10;--bg2:#13121a;--surface:#201f2d;--border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);--text:#e8e6f0;--muted:#7a7890;--accent:#c084fc;--accent2:#e879f9;--accent-bg:rgba(192,132,252,0.08);--pink:#f472b6;--teal:#2dd4bf;--gold:#fbbf24;--r:16px;--rs:10px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;overflow:hidden}
-#api-status{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:200;padding:5px 16px;border-radius:20px;border:1px solid var(--border2);background:var(--bg2);font-size:12px;color:var(--muted);transition:all .3s}
-#api-status.ok{border-color:rgba(45,212,191,.4);color:var(--teal)}
-#api-status.bad{border-color:rgba(248,113,113,.3);color:#f87171}
-.sidebar{width:260px;min-width:260px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
-.sidebar-header{padding:18px 16px 12px;border-bottom:1px solid var(--border)}
-.logo{font-family:'Noto Serif JP',serif;font-size:17px;color:var(--accent)}
-.search-box{margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);display:flex;align-items:center;gap:8px;padding:7px 11px}
-.search-box input{background:none;border:none;outline:none;color:var(--text);font-size:13px;font-family:inherit;width:100%}
-.search-box input::placeholder{color:var(--muted)}
-.slabel{font-size:10px;font-weight:500;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;padding:12px 16px 6px}
-.conv-list{overflow-y:auto;flex:1}
-.conv-item{display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-radius:var(--rs);margin:0 6px 2px;transition:background .15s;position:relative}
-.conv-item:hover{background:var(--surface)}
-.conv-item.active{background:var(--accent-bg)}
-.conv-item.active::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;background:var(--accent);border-radius:0 3px 3px 0}
-.cav{width:36px;height:36px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
-.cinfo{flex:1;min-width:0}
-.cname{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.clast{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.cmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0}
-.ctime{font-size:10px;color:var(--muted)}
-.cbadge{background:var(--accent);color:#1a0a2e;font-size:9px;font-weight:500;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center}
-.sfooter{padding:12px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:9px}
-.uav{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--pink));display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;color:white}
-.uinfo{flex:1;min-width:0}
-.uname{font-size:13px;font-weight:500}
-.uplan{font-size:10px;color:var(--gold)}
-.credit-chip{background:var(--surface);border:1px solid var(--border2);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--gold)}
-.chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
-.chat-header{background:rgba(13,12,16,.85);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);padding:12px 18px;display:flex;align-items:center;gap:12px;z-index:10}
-.char-av-wrap{position:relative}
-.char-av{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#581c87,#1e1b4b);display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid rgba(192,132,252,.25)}
-.ondot{width:9px;height:9px;background:var(--teal);border:2px solid var(--bg);border-radius:50%;position:absolute;bottom:1px;right:1px}
-.char-info{flex:1}
-.char-name-row{font-size:14px;font-weight:500;display:flex;align-items:center;gap:8px}
-.mood-tag{font-size:10px;padding:2px 8px;border-radius:20px;background:rgba(244,114,182,.15);color:var(--pink)}
-.char-sub{font-size:11px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:5px}
-.aff-mini{width:50px;height:3px;background:var(--border);border-radius:2px;overflow:hidden}
-.aff-mini-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--pink));border-radius:2px;transition:width .8s}
-.messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
-.messages::-webkit-scrollbar{width:4px}
-.messages::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-.mrow{display:flex;align-items:flex-end;gap:8px;animation:fu .22s ease}
-@keyframes fu{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.mrow.user{flex-direction:row-reverse}
-.mav{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;margin-bottom:18px}
-.mav.char{background:linear-gradient(135deg,#581c87,#1e1b4b)}
-.mav.uav2{background:linear-gradient(135deg,var(--accent),var(--pink));font-size:11px;font-weight:500;color:white}
-.mbody{max-width:68%;display:flex;flex-direction:column;gap:3px}
-.mrow.user .mbody{align-items:flex-end}
-.bubble{padding:10px 14px;border-radius:18px;font-size:14px;line-height:1.6}
-.bubble.char{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px;min-height:38px}
-.bubble.user{background:linear-gradient(135deg,#581c87,#3b0764);border-bottom-right-radius:4px;color:#f3e8ff}
-.bubble.typing{display:flex;align-items:center;gap:4px;padding:12px 16px}
-.tdot{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:bc .9s infinite}
-.tdot:nth-child(2){animation-delay:.15s}
-.tdot:nth-child(3){animation-delay:.3s}
-@keyframes bc{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
-.mtime{font-size:10px;color:var(--muted);padding:0 3px}
-.bimg{border-radius:14px;overflow:hidden;border:1px solid var(--border);max-width:260px;margin-top:4px;cursor:zoom-in}
-.bimg img{width:100%;display:block}
-.icap{font-size:11px;color:var(--muted);padding:5px 10px;background:var(--surface)}
-.datesep{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:4px 0}
-.datesep::before,.datesep::after{content:'';flex:1;height:1px;background:var(--border)}
-.err{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);color:#f87171;font-size:12px;padding:8px 14px;border-radius:10px;text-align:center}
-.suggests{padding:8px 16px 0;display:flex;gap:6px;flex-wrap:wrap}
-.sug-btn{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:5px 12px;font-size:12px;font-family:inherit;color:var(--muted);cursor:pointer;transition:all .15s;white-space:nowrap}
-.sug-btn:hover{border-color:rgba(192,132,252,.35);color:var(--accent);background:var(--accent-bg)}
-.img-bar{border-top:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:8px;background:rgba(13,12,16,.6);backdrop-filter:blur(10px)}
-.img-toggle{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--rs);border:1px solid var(--border2);background:var(--surface);color:var(--muted);font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap}
-.img-toggle:hover{color:var(--accent);background:var(--accent-bg)}
-.img-inp{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:7px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none}
-.img-inp:focus{border-color:rgba(192,132,252,.4)}
-.img-inp::placeholder{color:var(--muted)}
-.gen-btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:var(--rs);width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:white;flex-shrink:0}
-.gen-btn:hover{opacity:.85}
-.gen-btn:disabled{opacity:.4;cursor:not-allowed}
-.chat-input-area{border-top:1px solid var(--border);padding:10px 14px 14px;background:rgba(13,12,16,.85);backdrop-filter:blur(20px)}
-.input-wrap{display:flex;align-items:flex-end;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:22px;padding:6px 6px 6px 14px}
-.input-wrap:focus-within{border-color:rgba(192,132,252,.35)}
-.chat-inp{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14px;font-family:inherit;resize:none;max-height:100px;line-height:1.5;padding:4px 0}
-.chat-inp::placeholder{color:var(--muted)}
-.send-btn{width:34px;height:34px;border-radius:50%;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.send-btn:hover{opacity:.85}
-.send-btn:disabled{opacity:.35;cursor:not-allowed}
-.input-hint{font-size:10px;color:var(--muted);text-align:center;margin-top:6px;opacity:.6}
-.gen-overlay{display:none;position:absolute;inset:0;background:rgba(13,12,16,.72);backdrop-filter:blur(4px);z-index:20;align-items:center;justify-content:center;flex-direction:column;gap:12px}
-.gen-overlay.show{display:flex}
-.spinner{width:36px;height:36px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.gen-lbl{font-size:13px;color:var(--muted)}
-.right-panel{width:240px;min-width:240px;background:var(--bg2);border-left:1px solid var(--border);overflow-y:auto}
-.right-panel::-webkit-scrollbar{width:4px}
-.right-panel::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-.psec{padding:16px;border-bottom:1px solid var(--border)}
-.plbl{font-size:10px;font-weight:500;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px}
-.char-profile{text-align:center}
-.big-av{width:70px;height:70px;border-radius:50%;background:linear-gradient(135deg,#581c87,#1e1b4b);display:flex;align-items:center;justify-content:center;font-size:34px;margin:0 auto 10px;border:2px solid rgba(192,132,252,.2)}
-.cpname{font-family:'Noto Serif JP',serif;font-size:16px}
-.cpsub{font-size:11px;color:var(--muted);margin-top:2px}
-.traits{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px;justify-content:center}
-.trait{font-size:10px;padding:2px 8px;border-radius:20px;background:var(--surface);border:1px solid var(--border);color:var(--muted)}
-.srows{display:flex;flex-direction:column;gap:9px}
-.srow{display:flex;flex-direction:column;gap:4px}
-.slrow{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
-.slrow span:last-child{color:var(--text)}
-.strk{height:4px;background:var(--border);border-radius:2px;overflow:hidden}
-.sf{height:100%;border-radius:2px;transition:width .8s}
-.fa{background:linear-gradient(90deg,var(--accent),var(--pink))}
-.ft{background:var(--teal)}
-.fg{background:var(--gold)}
-.qbtns{display:flex;flex-direction:column;gap:5px}
-.qbtn{display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:7px 10px;color:var(--muted);font-size:12px;font-family:inherit;cursor:pointer;width:100%;text-align:left}
-.qbtn:hover{background:var(--accent-bg);color:var(--accent)}
-.memory-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.memory-head .plbl{margin-bottom:0}
-.memory-tools{display:flex;gap:4px}
-.memory-tool{width:25px;height:25px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer}
-.memory-tool:hover{color:var(--accent);border-color:rgba(192,132,252,.35)}
-.memory-list{display:flex;flex-direction:column;gap:6px}
-.memory-empty{font-size:11px;line-height:1.5;color:var(--muted)}
-.memory-item{display:flex;gap:6px;align-items:flex-start;padding:7px 8px;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
-.memory-copy{flex:1;min-width:0}
-.memory-key{font-size:9px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;overflow:hidden;text-overflow:ellipsis}
-.memory-value{font-size:11px;color:var(--text);line-height:1.4;margin-top:2px;word-break:break-word}
-.memory-actions{display:flex;gap:2px}
-.memory-action{border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:1px 3px}
-.memory-action:hover{color:var(--accent)}
-.memory-action.delete:hover{color:#f87171}
-.memory-note{font-size:9px;color:var(--muted);line-height:1.4;margin-top:8px}
-.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:300;align-items:center;justify-content:center}
-.lightbox.show{display:flex}
-.lightbox img{max-width:90%;max-height:90vh;border-radius:var(--r)}
-.lb-close{position:absolute;top:14px;right:14px;width:34px;height:34px;border-radius:50%;border:1px solid var(--border2);background:var(--bg2);color:var(--text);cursor:pointer}
+:root{
+  --bg:#0E0A1D;
+  --side:rgba(20,11,26,.55);
+  --side-solid:#1B1020;
+  --card:#2E1922;
+  --card2:#371F2A;
+  --raise:#432834;
+  --line:#553845;
+  --line-soft:rgba(241,164,187,.16);
+  --line-strong:#7A4256;
+  --text:#F8ECF1;
+  --text2:#DABECA;
+  --text3:#B99BA7;
+  --rose:#F1A4BB;
+  --rose-hover:#F6BDCC;
+  --rose-ink:#381320;
+  --rose-soft:#4B2532;
+  --user:#6C3246;
+  --mint:#8AD7B6;
+  --danger:#F69B94;
+  --serif:'Playfair Display', Georgia, 'Times New Roman', serif;
+  --sans:'Nunito', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --side-w:280px;
+  --panel-w:340px;
+}
+/* Tông màu riêng cho từng nhân vật (avatar, khung chân dung, chip sở thích). */
+.tone-rose{--tint:#5C2B3B;--tint-line:#7A4256;--chip-bg:#4B2532;--chip-fg:#F1A4BB;--glow:rgba(241,164,187,.16);--btn:#F1A4BB;--btn-hover:#F6BDCC;--btn-ink:#381320}
+.tone-honey{--tint:#4E381F;--tint-line:#6E5230;--chip-bg:#3F2D1C;--chip-fg:#EDC793;--glow:rgba(237,199,147,.14);--btn:#EDC793;--btn-hover:#F3D6AE;--btn-ink:#2E1E0A}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  background-color:var(--bg);
+  /* Ngân hà: sao lấm tấm và tinh vân tím ở trên, tối dần rồi tan xuống hồng dịu ở đáy. */
+  background-image:
+    radial-gradient(2px 2px at 6% 5%, rgba(255,244,250,.9), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 19% 13%, rgba(255,244,250,.7), rgba(255,244,250,0)),
+    radial-gradient(2px 2px at 33% 3%, rgba(255,244,250,.85), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 47% 10%, rgba(255,244,250,.6), rgba(255,244,250,0)),
+    radial-gradient(2.2px 2.2px at 61% 6%, rgba(255,244,250,.9), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 72% 15%, rgba(255,244,250,.65), rgba(255,244,250,0)),
+    radial-gradient(2px 2px at 86% 4%, rgba(255,244,250,.8), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 95% 12%, rgba(255,244,250,.6), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 11% 24%, rgba(255,244,250,.55), rgba(255,244,250,0)),
+    radial-gradient(1.8px 1.8px at 27% 31%, rgba(255,244,250,.5), rgba(255,244,250,0)),
+    radial-gradient(1.5px 1.5px at 54% 22%, rgba(255,244,250,.55), rgba(255,244,250,0)),
+    radial-gradient(1.8px 1.8px at 79% 28%, rgba(255,244,250,.5), rgba(255,244,250,0)),
+    radial-gradient(1.4px 1.4px at 41% 40%, rgba(255,244,250,.4), rgba(255,244,250,0)),
+    radial-gradient(1.4px 1.4px at 91% 43%, rgba(255,244,250,.35), rgba(255,244,250,0)),
+    radial-gradient(1.4px 1.4px at 3% 49%, rgba(255,244,250,.35), rgba(255,244,250,0)),
+    radial-gradient(ellipse 48% 34% at 78% 12%, rgba(165,135,240,.18), rgba(165,135,240,0) 70%),
+    radial-gradient(ellipse 42% 30% at 18% 26%, rgba(241,164,187,.10), rgba(241,164,187,0) 70%),
+    radial-gradient(ellipse 70% 28% at 50% 100%, rgba(241,164,187,.08), rgba(241,164,187,0) 70%),
+    linear-gradient(180deg, #0E0A1D 0%, #1C1130 36%, #34183C 66%, #613050 100%);
+  background-attachment:fixed;
+}
+a{color:var(--rose)}a:hover{color:var(--rose-hover)}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed}
+:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+::placeholder{color:var(--text3);opacity:1}
+[hidden]{display:none !important}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.display{font-family:var(--serif);font-style:italic;font-weight:600;line-height:1.2;margin:0}
+.eyebrow{margin:0;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text3)}
+.muted{color:var(--text2)}
+.thin-scroll{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+svg.ic{flex:0 0 auto}
+
+/* ── Khung ứng dụng ─────────────────────────────── */
+.app{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);height:100dvh}
+main#main{min-width:0;min-height:0}
+.screen{height:100dvh;min-width:0;min-height:0}
+
+/* ── Thanh bên ──────────────────────────────────── */
+.sidebar{background:var(--side);border-right:1px solid var(--line-soft);padding:24px 18px;display:flex;flex-direction:column;gap:18px;min-height:0;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:0 6px}
+.brand span{font-family:var(--serif);font-style:italic;font-weight:600;font-size:28px;line-height:1.1}
+.brand .ic{color:var(--rose)}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav a{min-height:44px;padding:0 12px;border-radius:12px;color:var(--text2);text-decoration:none;display:flex;align-items:center;gap:12px;font-weight:600}
+.nav a:hover{background:rgba(75,37,50,.55);color:var(--text)}
+.nav a[aria-current="page"]{background:var(--rose-soft);color:var(--text);font-weight:700}
+.nav a[aria-current="page"] .ic{color:var(--rose)}
+.conv-area{display:flex;flex-direction:column;gap:10px;flex:1 1 auto;min-height:0}
+body:not([data-screen="chat"]) .conv-area{display:none}
+.search{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;border-radius:12px;background:var(--raise);color:var(--text2)}
+.search input{flex:1 1 auto;min-width:0;min-height:40px;background:transparent;border:0;font-size:15px;color:var(--text)}
+.search input:focus-visible{outline:none}
+.search:focus-within{outline:2px solid var(--rose);outline-offset:2px}
+.conv-list{display:flex;flex-direction:column;gap:6px}
+.conv-group{margin:6px 6px 2px}
+.conv{display:flex;gap:12px;align-items:center;padding:10px;border-radius:14px;border:1px solid transparent;background:transparent;text-align:left;width:100%}
+.conv:hover{background:rgba(55,31,42,.7)}
+.conv[aria-current="true"]{background:var(--card2);border-color:var(--line)}
+.conv-text{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.conv-top{display:flex;justify-content:space-between;gap:8px}
+.conv-title{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv-time{font-size:13px;color:var(--text3);flex:0 0 auto}
+.conv-last{font-size:14px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv-empty{margin:4px 6px;font-size:14px;color:var(--text2)}
+.side-foot{display:flex;flex-direction:column;gap:12px;padding-top:16px;border-top:1px solid var(--line);margin-top:auto}
+body:not([data-screen="chat"]) .side-foot{margin-top:auto}
+.me{display:flex;align-items:center;gap:12px;width:calc(100% + 12px);margin:-6px;padding:6px;border-radius:14px;border:1px solid transparent;background:transparent;text-align:left}
+.me:hover{background:rgba(75,37,50,.55)}
+.me-text{flex:1 1 auto;min-width:0}
+.disclosure{margin:0;font-size:13px;color:var(--text3)}
+.me-av{flex:0 0 40px;width:40px;height:40px;border-radius:50%;background:var(--raise);display:flex;align-items:center;justify-content:center;font-weight:800}
+.me b{display:block;font-weight:700;line-height:1.3}
+.me small{display:block;font-size:13px;color:var(--text3);line-height:1.3}
+.status{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px;color:var(--text2)}
+.status li{display:flex;align-items:center;gap:8px}
+.dot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;border:1.5px solid var(--text3)}
+.dot.ok{background:var(--mint);border-color:var(--mint)}
+.dot.busy{background:var(--rose);border-color:var(--rose)}
+.dot.wait{border-color:var(--rose)}
+
+/* ── Nút ────────────────────────────────────────── */
+.btn{min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:700;font-size:15px;text-decoration:none}
+.btn:hover{background:rgba(75,37,50,.55);color:var(--text)}
+.btn-primary{background:var(--rose);border-color:var(--rose);color:var(--rose-ink);font-weight:800}
+.btn-primary:hover{background:var(--rose-hover);border-color:var(--rose-hover);color:var(--rose-ink)}
+.btn-primary:disabled{background:var(--rose-soft);border-color:var(--rose-soft);color:var(--text2)}
+.btn-tone{background:var(--btn);border-color:var(--btn);color:var(--btn-ink);font-weight:800}
+.btn-tone:hover{background:var(--btn-hover);border-color:var(--btn-hover);color:var(--btn-ink)}
+.btn-block{width:100%}
+.btn-lg{min-height:56px;border-radius:16px;font-size:17px}
+.btn-danger{color:var(--danger)}
+.btn-dashed{border-style:dashed;border-color:var(--line-strong);color:var(--rose)}
+.icon-btn{flex:0 0 44px;width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--text2);display:inline-flex;align-items:center;justify-content:center}
+.icon-btn:hover{background:rgba(75,37,50,.55);color:var(--text)}
+.icon-btn.bare{border-color:transparent}
+.icon-btn.soft{background:var(--raise);border-color:transparent;color:var(--rose)}
+.only-mobile{display:none !important}
+
+/* ── Avatar, chân dung vòm ──────────────────────── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;background:var(--tint);color:var(--text);font-family:var(--serif);font-style:italic;overflow:hidden}
+.av img{width:100%;height:100%;object-fit:cover}
+.av-xs{width:28px;height:28px;border-radius:14px 14px 7px 7px;font-size:14px}
+.av-sm{width:34px;height:34px;border-radius:17px 17px 8px 8px;font-size:17px}
+.av-md{width:40px;height:40px;border-radius:20px 20px 10px 10px;font-size:20px}
+.av-lg{width:52px;height:52px;border-radius:26px 26px 12px 12px;font-size:26px}
+.arch{position:relative;background:var(--tint);border:1px solid var(--tint-line);outline:1px solid var(--line);outline-offset:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;overflow:hidden}
+.arch img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.arch .ini{font-family:var(--serif);font-style:italic;line-height:1}
+.arch small{font-size:12px;color:var(--text2);padding:0 12px;text-align:center}
+.chips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.chips li{padding:4px 12px;border-radius:999px;background:var(--chip-bg);color:var(--chip-fg);font-size:13px;font-weight:700}
+
+/* ── Màn trò chuyện ─────────────────────────────── */
+.screen-chat{display:grid;grid-template-columns:minmax(0,1fr) var(--panel-w)}
+body.panel-closed .screen-chat{grid-template-columns:minmax(0,1fr)}
+body.panel-closed .screen-chat .panel{display:none}
+.chat-col{display:flex;flex-direction:column;min-width:0;min-height:0;height:100dvh}
+.chat-head{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:18px 28px;border-bottom:1px solid var(--line-soft)}
+.head-text{flex:1 1 220px;min-width:0;display:flex;flex-direction:column}
+.head-text h1{font-size:28px}
+.head-text span{font-size:14px;color:var(--text2)}
+.head-actions{display:flex;gap:8px}
+.head-actions .btn .ic{color:var(--rose)}
+.messages{flex:1 1 auto;min-height:0;overflow-y:auto;padding:28px}
+.messages-inner{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.day{display:flex;align-items:center;gap:12px;color:var(--text3);font-size:13px;font-weight:700}
+.day::before,.day::after{content:"";flex:1 1 auto;height:1px;background:var(--line)}
+.msg{display:flex;gap:12px;align-items:flex-end;max-width:78%}
+.msg .stack{display:flex;flex-direction:column;gap:8px;min-width:0}
+.msg.me{align-self:flex-end;flex-direction:column;align-items:flex-end;gap:4px;max-width:70%}
+.bubble{margin:0;padding:12px 16px;background:var(--card2);border:1px solid var(--line);border-radius:18px 18px 18px 6px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.me .bubble{background:var(--user);border-color:var(--user);border-radius:18px 18px 6px 18px}
+.time{font-size:12px;color:var(--text3);padding:0 4px}
+.typing{display:flex;gap:5px;align-items:center;min-height:48px}
+.bubble.drawing{display:flex;flex-direction:column;gap:10px;min-width:260px;white-space:normal}
+.bubble.drawing .help{font-size:13px}
+.typing i{width:7px;height:7px;border-radius:50%;background:var(--text3);animation:blink 1.2s infinite ease-in-out}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes blink{0%,80%,100%{opacity:.3;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+.shot{margin:0;width:248px;max-width:100%;border-radius:18px;overflow:hidden;border:1px solid var(--line);background:var(--card2)}
+.shot-open{display:block;width:100%;padding:0;border:0;background:var(--raise)}
+.shot-open img{display:block;width:100%;height:auto;min-height:160px;object-fit:cover}
+.shot figcaption{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:4px 4px 4px 14px;font-size:13px;color:var(--text2)}
+.shot figcaption span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shot .icon-btn{border-color:transparent;color:var(--rose)}
+.note{margin:0;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5}
+.note-error{background:rgba(246,155,148,.12);border:1px solid rgba(246,155,148,.35);color:#FBD3CF}
+.note-info{background:rgba(75,37,50,.6);border:1px solid var(--line);color:var(--text2)}
+.empty-chat{margin:auto;max-width:420px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:14px;padding:40px 0}
+.empty-chat h2{font-size:28px}
+.composer-wrap{width:100%;max-width:860px;margin:0 auto;padding:0 28px 22px;display:flex;flex-direction:column;gap:12px}
+.suggests{display:flex;flex-wrap:wrap;gap:8px}
+.suggests button{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text2);font-size:15px;font-weight:600}
+.suggests button:hover{color:var(--text);border-color:var(--line-strong)}
+.composer{display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:20px;background:var(--card2);border:1px solid var(--line)}
+.composer:focus-within{border-color:var(--line-strong)}
+.composer textarea{flex:1 1 auto;min-width:0;resize:none;background:transparent;border:0;font-size:16px;line-height:1.5;padding:10px 4px;max-height:160px;color:var(--text)}
+.composer textarea:focus-visible{outline:none}
+.send{flex:0 0 48px;width:48px;height:48px;border-radius:14px;border:0;background:var(--rose);color:var(--rose-ink);display:inline-flex;align-items:center;justify-content:center}
+.send:hover{background:var(--rose-hover)}
+.send:disabled{background:var(--rose-soft);color:var(--text3)}
+.composer .icon-btn.soft{width:48px;height:48px;flex-basis:48px;border-radius:14px}
+.hint{margin:0;font-size:13px;color:var(--text2);text-align:center}
+
+/* ── Bảng hồ sơ & ký ức ─────────────────────────── */
+.panel{background:var(--side);border-left:1px solid var(--line-soft);padding:28px 24px;display:flex;flex-direction:column;gap:24px;min-height:0;overflow-y:auto;height:100dvh}
+.profile{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding-top:8px;background:radial-gradient(circle closest-side at 50% 40%, var(--glow), transparent)}
+.profile .arch{width:168px;height:216px;border-radius:84px 84px 18px 18px}
+.profile .arch .ini{font-size:64px}
+.profile h2{font-size:30px;margin-top:12px}
+.profile p{margin:0;font-size:14px;color:var(--text2)}
+.panel-sec{display:flex;flex-direction:column;gap:10px}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.sec-head span{font-size:13px;color:var(--text3)}
+.facts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.fact{display:flex;align-items:center;gap:2px;padding:4px 2px 4px 14px;border-radius:14px;background:var(--card2);border:1px solid var(--line)}
+.fact-text{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;padding:4px 0}
+.fact-text small{font-size:12px;color:var(--text3);line-height:1.3}
+.fact-text span{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.fact .icon-btn{border-color:transparent}
+.fact-form{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;background:var(--card2);border:1px solid var(--line-strong)}
+.fact-form label{font-size:13px;color:var(--text2);font-weight:700}
+.input{min-height:44px;border-radius:12px;border:1px solid var(--line);background:var(--raise);color:var(--text);font-size:15px;padding:8px 12px;width:100%}
+.input:focus-visible{outline:2px solid var(--rose);outline-offset:1px}
+.row-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.row-actions .btn{min-height:40px}
+.fact-confirm{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;background:rgba(246,155,148,.08);border:1px solid rgba(246,155,148,.35)}
+.fact-confirm p{margin:0;font-size:14px}
+.small-note{margin:0;font-size:13px;color:var(--text2)}
+
+/* ── Trang chung (Tạo ảnh / Bộ sưu tập / Nhân vật) ─ */
+.page{height:100dvh;overflow-y:auto;padding:32px;display:flex;flex-direction:column;gap:24px;min-width:0}
+.page-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px}
+.page-head .titles{display:flex;flex-direction:column;gap:4px}
+.page-head h1{font-size:36px}
+.page-head p{margin:0;color:var(--text2)}
+.head-row{display:flex;align-items:center;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:24px}
+
+/* ── Tạo ảnh ────────────────────────────────────── */
+.studio-grid{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.studio-form{flex:1 1 380px;min-width:0;padding:24px;display:flex;flex-direction:column;gap:22px}
+fieldset{margin:0;padding:0;border:0;min-width:0}
+legend{padding:0;margin-bottom:10px}
+.field{display:flex;flex-direction:column;gap:8px}
+.choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.choice{min-height:60px;padding:8px 12px;border-radius:16px;border:2px solid var(--line);background:transparent;color:var(--text2);display:flex;align-items:center;gap:12px;text-align:left;font-weight:700}
+.choice[aria-pressed="true"]{border-color:var(--rose);background:var(--rose-soft);color:var(--text);font-weight:800}
+.choice:hover{border-color:var(--line-strong)}
+.seg{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:16px;background:rgba(14,10,29,.45);border:1px solid var(--line)}
+.seg button{flex:1 1 100px;min-height:44px;border-radius:12px;border:0;background:transparent;color:var(--text2);font-size:15px;font-weight:700}
+.seg button[aria-pressed="true"]{background:var(--rose);color:var(--rose-ink);font-weight:800}
+.quality{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+.quality button{min-height:64px;padding:6px;border-radius:14px;border:2px solid var(--line);background:transparent;color:var(--text2);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.quality button b{font-size:15px}
+.quality button small{font-size:13px;color:var(--text2)}
+.quality button[aria-pressed="true"]{border-color:var(--rose);background:var(--rose-soft);color:var(--text)}
+.textarea{box-sizing:border-box;width:100%;resize:vertical;border-radius:16px;border:1px solid var(--line);background:var(--raise);color:var(--text);font-size:16px;line-height:1.55;padding:14px 16px;min-height:120px}
+.textarea:focus-visible{outline:2px solid var(--rose);outline-offset:1px}
+.help{margin:0;font-size:14px;color:var(--text2);line-height:1.5}
+.help.center{text-align:center}
+.appearance{font-size:14px;color:var(--text2)}
+.appearance summary{cursor:pointer;min-height:32px;display:flex;align-items:center;gap:6px;list-style:none}
+.appearance summary::-webkit-details-marker{display:none}
+.appearance summary::before{content:"▸";color:var(--rose);font-size:13px}
+.appearance[open] summary::before{content:"▾"}
+.appearance p{margin:6px 0 0;padding:10px 12px;border-radius:12px;background:rgba(14,10,29,.45);font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.5;color:var(--text2)}
+.select{min-height:48px;border-radius:14px;border:1px solid var(--line);background:var(--raise);color:var(--text);font-size:16px;padding:0 14px}
+.check{display:flex;align-items:flex-start;gap:10px;min-height:44px;padding-top:10px;font-size:15px;color:var(--text2);cursor:pointer}
+.check input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--rose);flex:0 0 auto}
+.field-error{margin:0;font-size:14px;color:#FBD3CF}
+.stage{flex:1.3 1 440px;min-width:0;padding:24px;display:flex;flex-wrap:wrap;gap:24px;position:sticky;top:0}
+.stage-frame{flex:0 1 280px;min-width:200px;aspect-ratio:2 / 3;border-radius:18px;background:var(--raise);border:1px solid var(--line);outline:1px solid var(--line);outline-offset:6px;margin:7px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 24px;font-size:14px;color:var(--text2);overflow:hidden;position:relative}
+.stage-frame button{position:absolute;inset:0;padding:0;border:0;background:transparent}
+.stage-frame img{width:100%;height:100%;object-fit:cover;display:block}
+.stage-info{flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.stage-info h2{font-size:24px;line-height:1.3}
+.live{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;color:var(--rose)}
+.live .dot{background:var(--rose);border-color:var(--rose);animation:pulse 1.6s infinite ease-in-out}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.bar{height:10px;border-radius:999px;background:var(--raise);overflow:hidden;position:relative}
+.bar i{position:absolute;top:0;bottom:0;width:35%;border-radius:999px;background:var(--rose);animation:slide 1.8s infinite ease-in-out}
+@keyframes slide{0%{left:-35%}100%{left:100%}}
+.meta-line{font-size:14px;color:var(--text2)}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.recent{padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.recent-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.recent-head a{font-size:14px;font-weight:700;min-height:44px;display:flex;align-items:center}
+.strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.strip button{padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--raise);aspect-ratio:2 / 3}
+.strip img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* ── Bộ sưu tập ─────────────────────────────────── */
+.screen-gallery{display:grid;grid-template-columns:minmax(0,1fr) var(--panel-w)}
+.filters{display:flex;flex-wrap:wrap;gap:8px}
+.filters button{min-height:44px;padding:0 18px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--text2);font-size:15px;font-weight:700}
+.filters button[aria-pressed="true"]{background:var(--rose);border-color:var(--rose);color:var(--rose-ink)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr));gap:16px}
+.g-item{padding:0;border-radius:18px;border:2px solid var(--line);background:var(--card);color:inherit;text-align:left;overflow:hidden;display:flex;flex-direction:column}
+.g-item[aria-pressed="true"]{border-color:var(--rose);background:var(--rose-soft)}
+.g-item:hover{border-color:var(--line-strong)}
+.g-thumb{aspect-ratio:4 / 5;background:var(--raise);display:block;overflow:hidden}
+.g-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.g-cap{display:flex;align-items:center;gap:10px;padding:10px 12px 12px}
+.g-cap .t{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;line-height:1.35}
+.g-cap b{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.g-cap small{font-size:13px;color:var(--text3)}
+.empty{padding:40px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text2)}
+.detail{gap:18px}
+.detail-frame{align-self:center;width:100%;max-width:250px;aspect-ratio:2 / 3;border-radius:18px;background:var(--raise);border:1px solid var(--line);outline:1px solid var(--line-strong);outline-offset:6px;margin:7px;overflow:hidden;padding:0}
+.detail-frame img{width:100%;height:100%;object-fit:cover;display:block}
+.detail h2{font-size:22px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.dl{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.dl div{display:flex;flex-direction:column;min-width:0}
+.dl dt{font-size:13px;color:var(--text3)}
+.dl dd{margin:0;font-weight:700;overflow-wrap:anywhere}
+.prompt-box{margin:0;padding:12px 14px;border-radius:14px;background:var(--card2);border:1px solid var(--line);font-size:15px;color:var(--text2);line-height:1.55;overflow-wrap:anywhere}
+.detail-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.detail-actions .wide{grid-column:1 / -1}
+
+/* ── Chọn nhân vật ──────────────────────────────── */
+.page-center{align-items:center}
+.page-center .page-head{flex-direction:column;align-items:center;text-align:center;padding-top:16px}
+.page-center .page-head h1{font-size:44px;font-weight:500;text-wrap:balance}
+.char-grid{width:100%;max-width:1040px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));gap:28px}
+.char-card{background:var(--card);border:1px solid var(--line);border-radius:28px;padding:32px 28px 28px;display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;background-image:radial-gradient(circle at 50% 18%, var(--glow), transparent 42%)}
+.char-card .arch{width:196px;height:252px;border-radius:98px 98px 20px 20px;outline-offset:7px;margin-bottom:6px}
+.char-card .arch .ini{font-size:72px}
+.char-card h2{font-size:40px;line-height:1.15}
+.char-card blockquote{margin:0;font-family:var(--serif);font-style:italic;font-size:20px;line-height:1.5;color:var(--chip-fg);text-wrap:pretty}
+.char-card .chips{justify-content:center}
+.char-actions{width:100%;margin-top:auto;padding-top:8px;display:flex;flex-wrap:wrap;gap:10px}
+.char-actions .btn{flex:1 1 180px;min-height:52px;border-radius:16px}
+.linkish{background:none;border:0;padding:0;min-height:44px;color:var(--rose);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+
+/* ── Xem ảnh lớn, thông báo ─────────────────────── */
+dialog.lightbox{border:0;padding:0;background:transparent;max-width:min(92vw,900px);max-height:92vh;color:var(--text)}
+dialog.lightbox::backdrop{background:rgba(9,6,18,.82)}
+.lb-body{display:flex;flex-direction:column;gap:10px;align-items:center}
+.lb-body img{max-width:100%;max-height:80vh;border-radius:16px;display:block}
+.lb-body p{margin:0;font-size:14px;color:var(--text2);text-align:center;max-width:70ch}
+.lb-close{position:fixed;top:16px;right:16px;background:var(--card2)}
+.toast{position:fixed;right:24px;bottom:24px;z-index:50;max-width:min(92vw,520px);padding:12px 18px;border-radius:14px;background:var(--card2);border:1px solid var(--line-strong);box-shadow:0 10px 30px rgba(0,0,0,.35);font-size:15px}
+.scrim{position:fixed;inset:0;background:rgba(9,6,18,.6);z-index:30}
+dialog.modal{border:1px solid var(--line-strong);border-radius:24px;padding:0;background:var(--card);color:var(--text);width:min(92vw,540px);max-height:90vh;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+dialog.modal::backdrop{background:rgba(9,6,18,.78)}
+.modal-body{position:relative;display:flex;flex-direction:column;gap:14px;padding:28px;margin:0}
+.modal-body h2{font-size:28px;padding-right:44px}
+.modal-body h3{margin:0}
+.modal-body p{margin:0;color:var(--text2);line-height:1.6}
+.modal-body p b{color:var(--text)}
+.modal-body code{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:rgba(14,10,29,.5);padding:1px 6px;border-radius:6px;color:var(--text)}
+.modal-body label{font-size:14px;color:var(--text2)}
+.modal-body hr{border:0;border-top:1px solid var(--line);margin:4px 0;width:100%}
+.modal-close{position:absolute;top:16px;right:16px}
+.welcome-mark{color:var(--rose)}
+.btn-danger-fill{background:var(--danger);border-color:var(--danger);color:#3A0E0B;font-weight:800}
+.btn-danger-fill:hover{background:#F9B3AE;border-color:#F9B3AE;color:#3A0E0B}
+.btn-danger-fill:disabled{background:transparent;border-color:var(--line);color:var(--text3)}
+
+/* ── Màn hình hẹp: thanh bên và bảng hồ sơ thành ngăn kéo ─ */
+@media (max-width: 1100px){
+  :root{--panel-w:300px}
+}
+@media (max-width: 900px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .only-mobile{display:inline-flex !important}
+  .sidebar{position:fixed;inset:0 auto 0 0;width:min(86vw,320px);z-index:40;background:var(--side-solid);transform:translateX(-102%);transition:transform .2s ease}
+  .sidebar.open{transform:none}
+  .screen-chat,.screen-gallery{grid-template-columns:minmax(0,1fr)}
+  .screen-chat .panel{position:fixed;inset:0 0 0 auto;width:min(90vw,360px);z-index:40;background:var(--side-solid);transform:translateX(102%);transition:transform .2s ease;display:flex}
+  body.panel-closed .screen-chat .panel{display:flex}
+  .screen-chat .panel.open{transform:none}
+  .screen-gallery .detail{height:auto;border-left:0;border-top:1px solid var(--line-soft)}
+  .screen-gallery{height:auto;overflow-y:auto}
+  .screen-gallery .page{height:auto}
+  .chat-head{padding:12px 16px;gap:10px;flex-wrap:nowrap}
+  .chat-head .av-lg{width:40px;height:40px;border-radius:20px 20px 10px 10px;font-size:20px}
+  .head-text{flex:1 1 0}
+  .head-text h1{font-size:24px}
+  .head-text span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .suggests{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:0 16px}
+  .suggests::-webkit-scrollbar{display:none}
+  .suggests button{flex:0 0 auto;white-space:nowrap}
+  .stage{position:static}
+  .toast{left:16px;right:16px;bottom:112px}
+  .messages{padding:18px 16px}
+  .composer-wrap{padding:0 16px 16px}
+  .msg{max-width:92%}
+  .msg.me{max-width:85%}
+  .page{padding:20px 16px}
+  .page-head h1{font-size:30px}
+  .page-center .page-head h1{font-size:32px}
+  .head-actions .btn span{display:none}
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important;transition:none !important}
+}
 </style>
 </head>
-<body>
-
-<div id="api-status">Đang kết nối...</div>
-
-<div class="lightbox" id="lb" onclick="UI.closeLB()">
-  <button class="lb-close">✕</button>
-  <img id="lb-img" src="" alt="">
-</div>
-
-<div class="sidebar">
-  <div class="sidebar-header">
-    <div class="logo">yumeai</div>
-    <div class="search-box">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input type="text" placeholder="Tìm hội thoại..." autocomplete="off"
-        oninput="UI.filterConversations(this.value)">
+<body data-screen="chat">
+<div class="app">
+  <aside class="sidebar thin-scroll" id="sidebar" aria-label="Thanh bên">
+    <div class="brand"><i data-icon="moon" data-size="28"></i><span>YumeAI</span></div>
+    <button type="button" class="btn btn-primary btn-block" data-action="new-chat"><i data-icon="plus"></i>Cuộc trò chuyện mới</button>
+    <nav class="nav" aria-label="Mục chính">
+      <a href="#tro-chuyen" data-nav="chat"><i data-icon="chat"></i>Trò chuyện</a>
+      <a href="#tao-anh" data-nav="studio"><i data-icon="sparkle"></i>Tạo ảnh</a>
+      <a href="#bo-suu-tap" data-nav="gallery"><i data-icon="image"></i>Bộ sưu tập</a>
+      <a href="#nhan-vat" data-nav="characters"><i data-icon="people"></i>Nhân vật</a>
+    </nav>
+    <div class="conv-area">
+      <label class="search">
+        <i data-icon="search" data-size="18"></i>
+        <span class="sr">Tìm hội thoại</span>
+        <input type="search" id="conv-search" placeholder="Tìm hội thoại..." autocomplete="off">
+      </label>
+      <div class="conv-list" id="conv-list" aria-label="Hội thoại đã lưu"></div>
     </div>
-  </div>
-  <div class="slabel">Hội thoại đã lưu</div>
-  <div class="conv-list" id="conv-list"></div>
-  <div class="sfooter">
-    <div class="uav">M</div>
-    <div class="uinfo"><div class="uname">Minh</div><div class="uplan">● LOCAL</div></div>
-  </div>
-</div>
-
-<div class="chat-main">
-  <div class="chat-header">
-    <div class="char-av-wrap">
-      <div class="char-av" id="header-avatar">🌸</div>
-      <div class="ondot"></div>
+    <div class="side-foot">
+      <button type="button" class="me" data-action="open-data"><span class="me-av" aria-hidden="true">M</span><span class="me-text"><b id="me-name">Minh</b><small>Dữ liệu của bạn ›</small></span></button>
+      <ul class="status" id="status" aria-label="Trạng thái dịch vụ" aria-live="polite">
+        <li><span class="dot" id="st-chat-dot"></span><span id="st-chat">Trò chuyện (Ollama) · đang kiểm tra</span></li>
+        <li><span class="dot" id="st-draw-dot"></span><span id="st-draw">Bộ vẽ (ComfyUI) · đang kiểm tra</span></li>
+      </ul>
+      <p class="disclosure">Nhân vật AI · chạy trên máy này</p>
     </div>
-    <div class="char-info">
-      <div class="char-name-row"><span id="header-name">Yuki</span> <span class="mood-tag">AI character</span></div>
-      <div class="char-sub" id="header-role">Đang tải hồ sơ...</div>
-    </div>
-  </div>
+  </aside>
 
-  <div class="messages" id="messages"><div class="datesep">Hôm nay</div></div>
-
-  <div class="suggests">
-    <button class="sug-btn" onclick="UI.qs(this.textContent)">🎨 Hỏi về tranh</button>
-    <button class="sug-btn" onclick="UI.qs(this.textContent)">🌸 Kể về Tokyo</button>
-    <button class="sug-btn" onclick="UI.qs(this.textContent)">😊 Mày thế nào?</button>
-  </div>
-
-  <div class="img-bar">
-    <button class="img-toggle" onclick="document.getElementById('img-inp').focus()">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
-      Tạo ảnh
-    </button>
-    <input class="img-inp" id="img-inp" type="text"
-      placeholder="Mô tả ảnh... vd: Yuki mặc áo dài đỏ"
-      autocomplete="off" autocorrect="off" spellcheck="false"
-      onkeydown="if(event.key==='Enter'){event.preventDefault();UI.gen()}">
-    <button class="gen-btn" id="gen-btn" onclick="UI.gen()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 7-7 7 7M12 5v14"/></svg>
-    </button>
-  </div>
-
-  <div class="chat-input-area">
-    <div class="input-wrap">
-      <textarea class="chat-inp" id="chat-inp" rows="1"
-        placeholder="Nhắn với nhân vật..."
-        autocomplete="off" autocorrect="off" spellcheck="false"
-        onkeydown="UI.handleKey(event)" oninput="UI.resize(this)"></textarea>
-      <button class="send-btn" id="send-btn" onclick="UI.send()">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
-      </button>
-    </div>
-    <div class="input-hint">Enter gửi · Shift+Enter xuống dòng</div>
-  </div>
-
-  <div class="gen-overlay" id="gen-overlay">
-    <div class="spinner"></div>
-    <div class="gen-lbl" id="gen-lbl">Đang tạo ảnh...</div>
-  </div>
-</div>
-
-<div class="right-panel">
-  <div class="psec">
-    <div class="plbl">Nhân vật</div>
-    <div class="char-profile">
-      <div class="big-av" id="profile-avatar">🌸</div>
-      <div class="cpname" id="profile-name">Yuki</div>
-      <div class="cpsub" id="profile-role">Đang tải...</div>
-      <div class="traits" id="profile-traits"></div>
-    </div>
-  </div>
-  <div class="psec">
-    <div class="memory-head">
-      <div class="plbl">Trí nhớ đã lưu</div>
-      <div class="memory-tools">
-        <button class="memory-tool" title="Thêm trí nhớ" onclick="UI.addMemory()">＋</button>
-        <button class="memory-tool" title="Làm mới" onclick="UI._loadMemory()">↻</button>
+  <main id="main">
+    <!-- ═══ TRÒ CHUYỆN ═══ -->
+    <section class="screen screen-chat" data-screen="chat" aria-label="Trò chuyện">
+      <div class="chat-col">
+        <header class="chat-head">
+          <button type="button" class="icon-btn only-mobile" data-action="open-sidebar" aria-label="Mở thanh bên"><i data-icon="menu"></i></button>
+          <span class="av av-lg tone-rose" id="chat-av" aria-hidden="true">✦</span>
+          <div class="head-text">
+            <h1 class="display" id="chat-name" tabindex="-1">YumeAI</h1>
+            <span id="chat-sub"></span>
+          </div>
+          <div class="head-actions">
+            <button type="button" class="btn" data-action="draw-current" id="draw-current"><i data-icon="sparkle" data-size="18"></i><span id="draw-label">Vẽ</span></button>
+            <button type="button" class="icon-btn" data-action="delete-conversation" id="delete-conv" aria-label="Xoá cuộc trò chuyện này"><i data-icon="trash"></i></button>
+            <button type="button" class="icon-btn" data-action="toggle-panel" id="panel-toggle" aria-controls="panel" aria-expanded="true" aria-label="Ẩn hồ sơ và ký ức"><i data-icon="panel"></i></button>
+          </div>
+        </header>
+        <div class="messages thin-scroll" id="messages">
+          <div class="messages-inner" id="messages-inner" role="log" aria-live="polite" aria-label="Tin nhắn"></div>
+        </div>
+        <div class="composer-wrap">
+          <p class="note note-info" id="chat-notice" hidden></p>
+          <div class="suggests" id="suggests" role="group" aria-label="Gợi ý câu hỏi"></div>
+          <form class="composer" id="composer">
+            <button type="button" class="icon-btn soft" data-action="draw-current" aria-label="Vẽ ảnh nhân vật"><i data-icon="image" data-size="22"></i></button>
+            <label for="chat-input" class="sr" id="chat-input-label">Tin nhắn</label>
+            <textarea id="chat-input" rows="1" placeholder="Nhắn..." autocomplete="off"></textarea>
+            <button type="submit" class="send" id="send-btn" aria-label="Gửi"><i data-icon="send" data-size="22"></i></button>
+          </form>
+          <p class="hint">Enter để gửi · Shift + Enter để xuống dòng · nhắn “vẽ …” để nhân vật vẽ ảnh</p>
+        </div>
       </div>
-    </div>
-    <div class="memory-list" id="memory-list">
-      <div class="memory-empty">Chưa tải trí nhớ.</div>
-    </div>
-    <div class="memory-note" id="memory-note">Bạn có thể sửa hoặc xoá điều nhân vật nhớ sai.</div>
-  </div>
-  <div class="psec">
-    <div class="plbl">Gợi ý nhanh</div>
-    <div class="qbtns">
-      <button class="qbtn" onclick="UI.qs('Hôm nay em làm gì?')">🎨 Hỏi về hôm nay</button>
-      <button class="qbtn" onclick="UI.qs('Kể về Tokyo đi')">🗼 Hỏi về Tokyo</button>
-      <button class="qbtn" onclick="UI.qs('Mày thích nhạc gì?')">🎵 Hỏi về nhạc</button>
-    </div>
-  </div>
+
+      <aside class="panel thin-scroll" id="panel" aria-label="Hồ sơ và ký ức">
+        <button type="button" class="icon-btn only-mobile" data-action="close-panel" aria-label="Đóng hồ sơ" style="align-self:flex-end"><i data-icon="close"></i></button>
+        <section class="profile tone-rose" id="profile"></section>
+        <section class="panel-sec tone-rose" id="likes-sec">
+          <h3 class="eyebrow" id="likes-title">Sở thích</h3>
+          <ul class="chips" id="likes"></ul>
+        </section>
+        <section class="panel-sec" aria-labelledby="memory-title">
+          <div class="sec-head"><h3 class="eyebrow" id="memory-title">Ký ức</h3><span id="memory-count"></span></div>
+          <ul class="facts" id="facts"></ul>
+          <div id="fact-add"></div>
+          <p class="small-note" id="memory-note">Sửa hoặc xoá nếu nhân vật nhớ sai. Mỗi nhân vật có ký ức riêng.</p>
+        </section>
+        <button type="button" class="btn" data-action="new-chat" style="margin-top:auto"><i data-icon="people" data-size="18"></i>Đổi nhân vật</button>
+      </aside>
+    </section>
+
+    <!-- ═══ TẠO ẢNH ═══ -->
+    <section class="screen" data-screen="studio" aria-labelledby="studio-title" hidden>
+      <div class="page thin-scroll">
+        <header class="page-head">
+          <div class="head-row">
+            <button type="button" class="icon-btn only-mobile" data-action="open-sidebar" aria-label="Mở thanh bên"><i data-icon="menu"></i></button>
+            <div class="titles">
+              <h1 class="display" id="studio-title" tabindex="-1">Tạo ảnh</h1>
+              <p>Ngoại hình nhân vật luôn được giữ cố định — bạn chỉ cần tả cảnh.</p>
+            </div>
+          </div>
+        </header>
+        <div class="studio-grid">
+          <form class="card studio-form" id="studio-form" aria-label="Yêu cầu vẽ" novalidate>
+            <fieldset>
+              <legend class="eyebrow">Vẽ ai</legend>
+              <div class="choice-grid" id="studio-personas"></div>
+            </fieldset>
+            <fieldset>
+              <legend class="eyebrow">Kiểu ảnh</legend>
+              <div class="seg" id="studio-styles"></div>
+            </fieldset>
+            <div class="field">
+              <label class="eyebrow" for="studio-prompt">Tả cảnh</label>
+              <textarea class="textarea" id="studio-prompt" rows="4" aria-describedby="studio-prompt-error"></textarea>
+              <p class="field-error" id="studio-prompt-error" hidden>Hãy tả cảnh bạn muốn vẽ.</p>
+              <details class="appearance" id="studio-appearance-box">
+                <summary id="studio-appearance-title">Ngoại hình cố định (đã tự thêm)</summary>
+                <p id="studio-appearance"></p>
+              </details>
+            </div>
+            <fieldset>
+              <legend class="eyebrow">Chất lượng</legend>
+              <div class="quality" id="studio-quality"></div>
+              <p class="help" style="margin-top:10px" id="studio-quality-help">Càng kỹ càng lâu. Trên GPU 4 GB, ảnh “Tốt nhất” có thể mất vài phút.</p>
+            </fieldset>
+            <div class="field">
+              <label class="eyebrow" for="studio-upscale">Phóng to ảnh</label>
+              <select class="select" id="studio-upscale"></select>
+            </div>
+            <div class="field" style="gap:0">
+              <label class="check"><input type="checkbox" id="studio-enrich" checked><span>Để AI viết lời tả chi tiết hơn trước khi vẽ</span></label>
+              <label class="check" id="studio-attach-row"><input type="checkbox" id="studio-attach" checked><span id="studio-attach-label">Gửi ảnh vào cuộc trò chuyện đang mở</span></label>
+            </div>
+            <div class="field">
+              <button type="submit" class="btn btn-primary btn-lg" id="studio-submit"><i data-icon="sparkle"></i><span>Bắt đầu vẽ</span></button>
+              <p class="help center">Trong lúc vẽ, GPU dành cho bộ vẽ nên trò chuyện có thể chậm hơn.</p>
+            </div>
+          </form>
+
+          <section class="card stage" aria-label="Khung vẽ" aria-live="polite">
+            <div class="stage-frame" id="stage-frame"></div>
+            <div class="stage-info" id="stage-info"></div>
+          </section>
+        </div>
+        <section class="card recent" aria-labelledby="recent-title">
+          <div class="recent-head"><h2 class="eyebrow" id="recent-title">Vừa vẽ xong</h2><a href="#bo-suu-tap">Xem bộ sưu tập ›</a></div>
+          <div class="strip" id="recent-strip"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ═══ BỘ SƯU TẬP ═══ -->
+    <section class="screen screen-gallery" data-screen="gallery" aria-labelledby="gallery-title" hidden>
+      <div class="page thin-scroll">
+        <header class="page-head">
+          <div class="head-row">
+            <button type="button" class="icon-btn only-mobile" data-action="open-sidebar" aria-label="Mở thanh bên"><i data-icon="menu"></i></button>
+            <div class="titles">
+              <h1 class="display" id="gallery-title" tabindex="-1">Bộ sưu tập</h1>
+              <p>Ảnh đã vẽ cho các nhân vật.</p>
+            </div>
+          </div>
+          <label class="head-row" style="font-size:14px;color:var(--text2)">Sắp xếp
+            <select class="select" id="gallery-sort" style="min-height:44px;font-size:15px">
+              <option value="new">Mới nhất</option>
+              <option value="old">Cũ nhất</option>
+            </select>
+          </label>
+        </header>
+        <div class="filters" id="gallery-filters" role="group" aria-label="Lọc theo nhân vật"></div>
+        <div class="grid" id="gallery-grid"></div>
+      </div>
+      <aside class="panel detail thin-scroll" id="gallery-detail" aria-label="Chi tiết ảnh"></aside>
+    </section>
+
+    <!-- ═══ CHỌN NHÂN VẬT ═══ -->
+    <section class="screen" data-screen="characters" aria-labelledby="chars-title" hidden>
+      <div class="page page-center thin-scroll">
+        <button type="button" class="icon-btn only-mobile" data-action="open-sidebar" aria-label="Mở thanh bên" style="align-self:flex-start"><i data-icon="menu"></i></button>
+        <header class="page-head">
+          <h1 class="display" id="chars-title" tabindex="-1">Hôm nay bạn muốn gặp ai?</h1>
+          <p>Mỗi người có cách nói chuyện và ký ức riêng về bạn.</p>
+        </header>
+        <div class="char-grid" id="char-grid"></div>
+      </div>
+    </section>
+  </main>
 </div>
+
+<div class="scrim" id="scrim" hidden></div>
+<dialog class="lightbox" id="lightbox" aria-label="Xem ảnh lớn">
+  <button type="button" class="icon-btn lb-close" data-action="close-lightbox" aria-label="Đóng"><i data-icon="close"></i></button>
+  <div class="lb-body"><img id="lb-img" alt=""><p id="lb-cap"></p></div>
+</dialog>
+<dialog class="modal" id="welcome" aria-labelledby="welcome-title">
+  <div class="modal-body">
+    <span class="welcome-mark"><i data-icon="moon" data-size="32"></i></span>
+    <h2 class="display" id="welcome-title">Chào bạn đến với YumeAI</h2>
+    <p>Pao và Su là <b>nhân vật AI</b>: lời của họ do một mô hình ngôn ngữ chạy trên chính máy này viết ra. Họ không phải người thật, và có lúc sẽ nhớ sai hay nói sai.</p>
+    <p>Cuộc trò chuyện, ký ức và ảnh được lưu trong thư mục <code>project/data</code> trên máy này. YumeAI không gửi chúng đi đâu.</p>
+    <p>Ký ức xem, sửa, xoá ngay trong bảng hồ sơ. Xuất hoặc xoá toàn bộ dữ liệu ở mục <b>Dữ liệu của bạn</b> dưới thanh bên.</p>
+    <button type="button" class="btn btn-primary btn-lg" data-action="close-welcome">Mình hiểu, bắt đầu thôi</button>
+  </div>
+</dialog>
+
+<dialog class="modal" id="data-dialog" aria-labelledby="data-title">
+  <div class="modal-body">
+    <button type="button" class="icon-btn modal-close" data-action="close-data" aria-label="Đóng"><i data-icon="close"></i></button>
+    <h2 class="display" id="data-title">Dữ liệu của bạn</h2>
+    <p>Mọi cuộc trò chuyện, ký ức và ảnh nằm trong <code>project/data</code> trên máy này, cùng sổ đo tốc độ chat và vẽ (chỉ có số và giờ đo, không có nội dung).</p>
+    <p id="data-counts"></p>
+    <a class="btn btn-block" id="export-link" href="#" download><i data-icon="download" data-size="18"></i>Xuất toàn bộ dữ liệu (.zip)</a>
+    <p class="help">File zip gồm <code>data.json</code> (hội thoại, tin nhắn, ký ức, thông tin ảnh) và toàn bộ ảnh.</p>
+    <hr>
+    <h3 class="eyebrow">Xoá toàn bộ</h3>
+    <p class="help">Xoá mọi cuộc trò chuyện, ký ức, ảnh của bạn và sổ đo tốc độ — <b>không hoàn tác được</b>, nên xuất dữ liệu trước. Nhân vật Pao và Su vẫn giữ nguyên. Các bản sao lưu cũ trong <code>project/data/backups</code> không bị xoá; muốn sạch hẳn thì xoá thư mục đó bằng tay.</p>
+    <label for="delete-confirm">Gõ <b>XOÁ</b> để xác nhận</label>
+    <input class="input" id="delete-confirm" autocomplete="off">
+    <button type="button" class="btn btn-danger-fill btn-block" id="delete-all" disabled>Xoá toàn bộ dữ liệu</button>
+  </div>
+</dialog>
+
+<dialog class="modal" id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog" class="modal-body">
+    <h2 class="display" id="confirm-title">Xoá?</h2>
+    <p id="confirm-text"></p>
+    <div class="row-actions">
+      <button type="submit" value="cancel" class="btn">Giữ lại</button>
+      <button type="submit" value="ok" class="btn btn-danger-fill" id="confirm-ok">Xoá</button>
+    </div>
+  </form>
+</dialog>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
+'use strict'
 // ════════════════════════════════════════
-// CONFIG & STATE
+// CẤU HÌNH
 // ════════════════════════════════════════
-const CFG = {
-  API:       location.protocol.startsWith('http') ? location.origin : 'http://localhost:8000',
-  USER:      'user_001',
-  USER_NAME: 'Minh'
+const API = location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000'
+const USER = 'user_001'
+const USER_NAME = 'Minh'
+const LS_CONV = 'yumeai_conversation_id'
+const LS_PANEL = 'yumeai_panel_closed'
+const LS_WELCOME = 'yumeai_welcome_v1'
+const DELETE_WORDS = ['XOÁ', 'XÓA', 'XOA']
+
+// Giá trị gửi lên PHẢI khớp hằng trong yumeai/services/comfy_service.py.
+const QUALITIES = [
+  { value: 'Tốt nhất (50 steps)', label: 'Tốt nhất', sub: '50 bước' },
+  { value: 'Cao (35 steps)', label: 'Cao', sub: '35 bước' },
+  { value: 'Cân bằng (28 steps)', label: 'Cân bằng', sub: '28 bước' },
+  { value: 'Nhanh (20 steps)', label: 'Nháp', sub: '20 bước' },
+]
+const STYLES = [
+  { value: 'Anime', label: 'Anime' },
+  { value: 'Semi', label: 'Bán thực' },
+  { value: 'Realistic', label: 'Chân thực' },
+]
+const UPSCALES = [
+  { value: 'Không upscale', label: 'Không phóng to' },
+  { value: '2x (ESRGAN)', label: 'Gấp đôi (ESRGAN) — lâu hơn' },
+  { value: '1.5x (Latent)', label: '1,5 lần (Latent) — lâu hơn' },
+]
+// Màu riêng của từng nhân vật; nhân vật mới chưa có trong bảng thì xen kẽ theo thứ tự.
+const TONES = { pao: 'rose', su: 'honey' }
+const ROUTES = { 'tro-chuyen': 'chat', 'tao-anh': 'studio', 'bo-suu-tap': 'gallery', 'nhan-vat': 'characters' }
+const HASHES = { chat: 'tro-chuyen', studio: 'tao-anh', gallery: 'bo-suu-tap', characters: 'nhan-vat' }
+const TITLES = { chat: 'YumeAI — Trò chuyện', studio: 'YumeAI — Tạo ảnh', gallery: 'YumeAI — Bộ sưu tập', characters: 'YumeAI — Chọn nhân vật' }
+
+const ICON_PATHS = {
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/><path d="M17 3v3"/><path d="M15.5 4.5h3"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
+  people: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6 6 0 0 1 3 5.5"/>',
+  panel: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/>',
+  send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  expand: '<path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/>',
+  download: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+  menu: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
+  close: '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+  redo: '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>',
 }
 
-const STATE = {
-  busy: false,
-  online: false,
-  comfy: false,
-  conversationId: localStorage.getItem('yumeai_conversation_id'),
-  personaId: 'yuki',
+// ════════════════════════════════════════
+// TRẠNG THÁI
+// ════════════════════════════════════════
+const S = {
   personas: [],
-  conversations: []
+  conversations: [],
+  conversationId: lsGet(LS_CONV),
+  personaId: null,
+  messages: [],
+  health: { backend: null, ollama: false, comfy: false },
+  busy: false,
+  search: '',
+  facts: [],
+  memoryInfo: null,
+  memoryError: '',
+  editingKey: null,
+  confirmKey: null,
+  adding: false,
+  gallery: [],
+  galleryError: '',
+  galleryFilter: 'all',
+  gallerySort: 'new',
+  galleryId: null,
+  studio: { personaId: null, style: 'Anime', quality: QUALITIES[0].value, upscale: UPSCALES[0].value, enrich: true, attach: true },
+  drawing: false,
+  drawStart: 0,
+  drawPreset: null,
+  drawLabel: '',
+  drawTimer: null,
+  drawResult: null,
+  drawError: '',
+  stats: null,
 }
 
-const ICONS = { yuki: '🌸', hana: '🌙' }
-
 // ════════════════════════════════════════
-// UI NAMESPACE — tất cả hàm public ở đây
+// TIỆN ÍCH
 // ════════════════════════════════════════
-const UI = {
-  async init() {
-    await UI.checkHealth()
+const $ = (sel) => document.querySelector(sel)
+
+function lsGet(key) { try { return localStorage.getItem(key) } catch (e) { return null } }
+function lsSet(key, value) { try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, value) } catch (e) {} }
+
+/** Dựng phần tử DOM; mọi chuỗi đi vào bằng textContent nên không chèn được HTML. */
+function h(tag, props, ...kids) {
+  const node = document.createElement(tag)
+  if (props) {
+    for (const [key, value] of Object.entries(props)) {
+      if (value == null || value === false) continue
+      if (key === 'class') node.className = value
+      else if (key === 'text') node.textContent = value
+      else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value)
+      else if (value === true) node.setAttribute(key, '')
+      else node.setAttribute(key, String(value))
+    }
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue
+    node.append(kid instanceof Node ? kid : String(kid))
+  }
+  return node
+}
+
+function icon(name, size = 20) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  for (const [k, v] of Object.entries({
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+    'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'ic',
+  })) svg.setAttribute(k, v)
+  svg.innerHTML = ICON_PATHS[name] || ''   // chỉ hằng số trong ICON_PATHS
+  return svg
+}
+
+function fillIcons(root = document) {
+  for (const slot of root.querySelectorAll('i[data-icon]')) {
+    slot.replaceWith(icon(slot.dataset.icon, Number(slot.dataset.size) || 20))
+  }
+}
+
+async function api(path, { method = 'GET', json } = {}) {
+  const init = { method, headers: {} }
+  if (json !== undefined) {
+    init.headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(json)
+  }
+  let res
+  try {
+    res = await fetch(API + path, init)
+  } catch (e) {
+    const err = new Error('Không kết nối được máy chủ YumeAI')
+    err.status = 0
+    throw err
+  }
+  if (!res.ok) {
+    let detail = ''
     try {
-      await UI._loadPersonas()
-      await UI._loadConversations()
-    } catch (err) {
-      UI._addErr('Không tải được dữ liệu: ' + err.message)
-    }
-  },
-
-  // ── Health check ────────────────
-  async checkHealth() {
-    const el = document.getElementById('api-status')
-    el.style.opacity = '1'
-    try {
-      const r = await fetch(`${CFG.API}/health`, { signal: AbortSignal.timeout(3000) })
-      const d = await r.json()
-      STATE.online = d.ollama === true
-      STATE.comfy = d.comfyui === true
-
-      if (d.ollama && d.comfyui) {
-        el.className = 'ok'
-        el.textContent = '🟢 Local AI sẵn sàng'
-      } else if (d.ollama) {
-        el.className = 'ok'
-        el.textContent = '🟡 Ollama OK · ComfyUI chưa chạy'
-      } else {
-        el.className = 'bad'
-        el.textContent = '⚠️ Ollama chưa chạy'
-      }
-    } catch (err) {
-      STATE.online = false
-      STATE.comfy = false
-      el.className = 'bad'
-      el.textContent = '⚠️ Backend chưa chạy'
-    }
-  },
-
-  async _loadPersonas() {
-    const r = await fetch(`${CFG.API}/api/personas`)
-    if (!r.ok) throw new Error('Không đọc được danh sách nhân vật')
-    STATE.personas = (await r.json()).personas || []
-  },
-
-  async _loadConversations() {
-    await UI._fetchConversations()
-    // Lần chạy đầu: tạo một hội thoại cho mỗi persona dựng sẵn để sidebar có
-    // điểm vào thật, thay cho hai item mock trước đây.
-    if (!STATE.conversations.length) {
-      for (const persona of STATE.personas) {
-        const r = await fetch(`${CFG.API}/api/conversations`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: CFG.USER,
-            user_name: CFG.USER_NAME,
-            persona_id: persona.id
-          })
-        })
-        if (!r.ok) throw new Error(`Không tạo được hội thoại với ${persona.name}`)
-      }
-      await UI._fetchConversations()
-    }
-
-    const selected = STATE.conversations.find(c => c.id === STATE.conversationId)
-      || STATE.conversations[0]
-    if (selected) await UI.openConversation(selected.id)
-  },
-
-  async _fetchConversations() {
-    const r = await fetch(`${CFG.API}/api/conversations?user_id=${encodeURIComponent(CFG.USER)}`)
-    if (!r.ok) throw new Error('Không đọc được lịch sử hội thoại')
-    STATE.conversations = (await r.json()).conversations || []
-    UI._renderConversations()
-  },
-
-  _renderConversations() {
-    const list = document.getElementById('conv-list')
-    list.replaceChildren()
-    for (const conv of STATE.conversations) {
-      const item = document.createElement('div')
-      item.className = 'conv-item' + (conv.id === STATE.conversationId ? ' active' : '')
-      item.onclick = () => UI.openConversation(conv.id)
-
-      const avatar = document.createElement('div')
-      avatar.className = 'cav'
-      avatar.textContent = ICONS[conv.character_id] || '✦'
-
-      const info = document.createElement('div')
-      info.className = 'cinfo'
-      const name = document.createElement('div')
-      name.className = 'cname'
-      name.textContent = conv.character_name
-      const last = document.createElement('div')
-      last.className = 'clast'
-      last.textContent = UI._lastMessageLabel(conv.last_message)
-      info.append(name, last)
-
-      const meta = document.createElement('div')
-      meta.className = 'cmeta'
-      const time = document.createElement('div')
-      time.className = 'ctime'
-      time.textContent = UI._shortDate(conv.updated_at)
-      meta.appendChild(time)
-      item.append(avatar, info, meta)
-      list.appendChild(item)
-    }
-  },
-
-  filterConversations(query) {
-    const normalized = String(query || '').trim().toLocaleLowerCase('vi-VN')
-    for (const item of document.querySelectorAll('.conv-item')) {
-      const text = item.textContent.toLocaleLowerCase('vi-VN')
-      item.style.display = !normalized || text.includes(normalized) ? '' : 'none'
-    }
-  },
-
-  async openConversation(conversationId) {
-    const r = await fetch(
-      `${CFG.API}/api/conversations/${encodeURIComponent(conversationId)}`
-      + `?user_id=${encodeURIComponent(CFG.USER)}`
-    )
-    if (!r.ok) throw new Error('Không mở được hội thoại')
-    const data = await r.json()
-    STATE.conversationId = conversationId
-    STATE.personaId = data.conversation.character_id
-    localStorage.setItem('yumeai_conversation_id', conversationId)
-    UI._renderConversations()
-    UI._renderProfile()
-    UI._renderMessages(data.messages || [])
-    await UI._loadMemory()
-  },
-
-  _renderProfile() {
-    const persona = STATE.personas.find(p => p.id === STATE.personaId) || {}
-    const icon = ICONS[STATE.personaId] || '✦'
-    document.getElementById('header-avatar').textContent = icon
-    document.getElementById('header-name').textContent = persona.name || STATE.personaId
-    document.getElementById('header-role').textContent = persona.role || ''
-    document.getElementById('profile-avatar').textContent = icon
-    document.getElementById('profile-name').textContent = persona.name || STATE.personaId
-    document.getElementById('profile-role').textContent = `${persona.age || '?'} tuổi · ${persona.role || ''}`
-    document.getElementById('chat-inp').placeholder = `Nhắn với ${persona.name || 'nhân vật'}...`
-
-    const traits = document.getElementById('profile-traits')
-    traits.replaceChildren()
-    for (const like of (persona.likes || []).slice(0, 4)) {
-      const tag = document.createElement('span')
-      tag.className = 'trait'
-      tag.textContent = like
-      traits.appendChild(tag)
-    }
-  },
-
-  _renderMessages(messages) {
-    const box = document.getElementById('messages')
-    box.replaceChildren()
-    const date = document.createElement('div')
-    date.className = 'datesep'
-    date.textContent = 'Hội thoại đã lưu'
-    box.appendChild(date)
-    for (const msg of messages) {
-      if (msg.content_type === 'image') {
-        try {
-          const data = JSON.parse(msg.content)
-          UI._addImage(UI._absoluteUrl(data.image_url), data.prompt || 'Ảnh đã tạo', msg.created_at)
-        } catch (err) {
-          UI._addErr('Một ảnh cũ có metadata không hợp lệ')
-        }
-      } else {
-        UI._addMsg(msg.role === 'user' ? 'user' : 'ai', msg.content, msg.created_at)
-      }
-    }
-    UI._scroll()
-  },
-
-  async _loadMemory() {
-    const list = document.getElementById('memory-list')
-    try {
-      const url = `${CFG.API}/api/memory?user_id=${encodeURIComponent(CFG.USER)}`
-        + `&persona_id=${encodeURIComponent(STATE.personaId)}`
-      const r = await fetch(url)
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      const data = await r.json()
-      UI._renderMemory(data.facts || [])
-      document.getElementById('memory-note').textContent = data.auto_extraction
-        ? `Tự cập nhật mỗi ${data.extraction_every_messages} tin nhắn · có thể sửa/xoá`
-        : 'Tự trích xuất đang tắt · bạn vẫn có thể thêm thủ công'
-    } catch (err) {
-      list.replaceChildren()
-      const empty = document.createElement('div')
-      empty.className = 'memory-empty'
-      empty.textContent = 'Không tải được trí nhớ: ' + err.message
-      list.appendChild(empty)
-    }
-  },
-
-  _renderMemory(facts) {
-    const list = document.getElementById('memory-list')
-    list.replaceChildren()
-    if (!facts.length) {
-      const empty = document.createElement('div')
-      empty.className = 'memory-empty'
-      empty.textContent = 'Chưa có fact nào. Chat thêm hoặc bấm ＋ để thêm.'
-      list.appendChild(empty)
-      return
-    }
-    for (const fact of facts) {
-      const item = document.createElement('div')
-      item.className = 'memory-item'
-      const copy = document.createElement('div')
-      copy.className = 'memory-copy'
-      const key = document.createElement('div')
-      key.className = 'memory-key'
-      key.textContent = fact.fact_key.replaceAll('_', ' ')
-      const value = document.createElement('div')
-      value.className = 'memory-value'
-      value.textContent = fact.fact_value
-      copy.append(key, value)
-
-      const actions = document.createElement('div')
-      actions.className = 'memory-actions'
-      const edit = document.createElement('button')
-      edit.className = 'memory-action'
-      edit.title = 'Sửa'
-      edit.textContent = '✎'
-      edit.onclick = () => UI.editMemory(fact.fact_key, fact.fact_value)
-      const remove = document.createElement('button')
-      remove.className = 'memory-action delete'
-      remove.title = 'Xoá'
-      remove.textContent = '×'
-      remove.onclick = () => UI.deleteMemory(fact.fact_key)
-      actions.append(edit, remove)
-      item.append(copy, actions)
-      list.appendChild(item)
-    }
-  },
-
-  async addMemory() {
-    const key = prompt('Tên ngắn cho trí nhớ (ví dụ: favorite_drink):')
-    if (!key || !key.trim()) return
-    await UI.editMemory(key.trim(), '')
-  },
-
-  async editMemory(key, oldValue) {
-    const value = prompt('Nhân vật nên nhớ điều gì?', oldValue || '')
-    if (value === null || !value.trim()) return
-    try {
-      const r = await fetch(`${CFG.API}/api/memory/${encodeURIComponent(key)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: CFG.USER,
-          persona_id: STATE.personaId,
-          value: value.trim(),
-          confidence: 1
-        })
-      })
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      await UI._loadMemory()
-    } catch (err) {
-      UI._addErr('Không lưu được trí nhớ: ' + err.message)
-    }
-  },
-
-  async deleteMemory(key) {
-    if (!confirm(`Xoá trí nhớ “${key.replaceAll('_', ' ')}”?`)) return
-    try {
-      const url = `${CFG.API}/api/memory/${encodeURIComponent(key)}`
-        + `?user_id=${encodeURIComponent(CFG.USER)}`
-        + `&persona_id=${encodeURIComponent(STATE.personaId)}`
-      const r = await fetch(url, { method: 'DELETE' })
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      await UI._loadMemory()
-    } catch (err) {
-      UI._addErr('Không xoá được trí nhớ: ' + err.message)
-    }
-  },
-
-  // ── Send chat message ───────────
-  async send() {
-    if (STATE.busy) return
-    const inp = document.getElementById('chat-inp')
-    const txt = inp.value.trim()
-    if (!txt) return
-    if (!STATE.online) {
-      UI._addErr('Ollama chưa sẵn sàng. Hãy chạy ollama serve rồi thử lại.')
-      return
-    }
-    if (!STATE.conversationId) {
-      UI._addErr('Chưa có cuộc hội thoại được chọn.')
-      return
-    }
-
-    inp.value = ''
-    inp.style.height = 'auto'
-    STATE.busy = true
-    document.getElementById('send-btn').disabled = true
-
-    UI._addMsg('user', txt)
-    UI._showTyping()
-
-    try {
-      const res = await fetch(`${CFG.API}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: txt,
-          persona_id: STATE.personaId,
-          user_id: CFG.USER,
-          user_name: CFG.USER_NAME,
-          conversation_id: STATE.conversationId
-        })
-      })
-      if (!res.ok) throw new Error('HTTP ' + res.status)
-
-      UI._removeTyping()
-      const row = UI._addMsg('ai', '')
-      const bbl = row.querySelector('.stream-bbl')
-      const reader = res.body.getReader()
-      const dec = new TextDecoder()
-      let full = ''
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        buffer += dec.decode(value || new Uint8Array(), { stream: !done })
-        const events = buffer.split(/\r?\n\r?\n/)
-        buffer = events.pop() || ''
-        for (const event of events) {
-          const line = event.split(/\r?\n/).find(x => x.startsWith('data: '))
-          if (!line) continue
-          const payload = JSON.parse(line.slice(6))
-          if (payload.error) throw new Error(payload.error)
-          if (payload.token) {
-            full += payload.token
-            bbl.textContent = full
-            UI._scroll()
-          }
-        }
-        if (done) break
-      }
-      await UI._fetchConversations()
-    } catch (err) {
-      UI._removeTyping()
-      UI._addErr('Lỗi chat: ' + err.message)
-    }
-
-    STATE.busy = false
-    document.getElementById('send-btn').disabled = false
-  },
-
-  // ── Generate image ──────────────
-  async gen() {
-    const inp = document.getElementById('img-inp')
-    const prompt = inp.value.trim()
-    if (!prompt) { inp.focus(); return }
-    if (!STATE.comfy) {
-      UI._addErr('ComfyUI chưa sẵn sàng. Hãy khởi động ComfyUI rồi thử lại.')
-      return
-    }
-
-    const overlay = document.getElementById('gen-overlay')
-    const btn     = document.getElementById('gen-btn')
-    const lbl     = document.getElementById('gen-lbl')
-
-    overlay.classList.add('show')
-    btn.disabled = true
-    inp.blur()
-
-    try {
-      let imgSrc
-      lbl.textContent = 'ComfyUI đang vẽ... có thể mất vài phút'
-      const res = await fetch(`${CFG.API}/api/images/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          persona_id: STATE.personaId,
-          user_id: CFG.USER,
-          conversation_id: STATE.conversationId,
-          include_base64: false
-        })
-      })
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.detail || `HTTP ${res.status}`)
-      }
-
       const data = await res.json()
-      if (data.image_url) {
-        imgSrc = UI._absoluteUrl(data.image_url)
-      } else if (data.image_base64) {
-        imgSrc = `data:image/png;base64,${data.image_base64}`
-      } else {
-        throw new Error('Không có ảnh trong response')
-      }
+      if (typeof data.detail === 'string') detail = data.detail
+    } catch (e) {}
+    const err = new Error(detail || `Máy chủ trả lỗi ${res.status}`)
+    err.status = res.status
+    throw err
+  }
+  return res.json()
+}
 
-      overlay.classList.remove('show')
-      lbl.textContent = 'Đang tạo ảnh...'
+const qs = (params) => '?' + new URLSearchParams(params).toString()
+const url = (value) => (!value || /^(https?:|data:|blob:)/.test(value)) ? value : API + (value.startsWith('/') ? '' : '/') + value
 
-      UI._addImage(imgSrc, prompt)
-      inp.value = ''
-      await UI._fetchConversations()
-    } catch (err) {
-      overlay.classList.remove('show')
-      lbl.textContent = 'Đang tạo ảnh...'
-      UI._addErr('Tạo ảnh thất bại: ' + err.message)
-      console.error(err)
+function persona(id) { return S.personas.find((p) => p.id === id) || null }
+function toneOf(id) {
+  if (TONES[id]) return TONES[id]
+  const index = S.personas.findIndex((p) => p.id === id)
+  return index % 2 === 1 ? 'honey' : 'rose'
+}
+function nameOf(id) { return persona(id)?.name || id || 'Nhân vật' }
+function initialOf(id) { return (nameOf(id).trim()[0] || '✦').toLocaleUpperCase('vi-VN') }
+function subOf(p) {
+  if (!p) return ''
+  return [p.age ? `${p.age} tuổi` : '', p.role || ''].filter(Boolean).join(' · ')
+}
+function avatar(personaId, size = 'md') {
+  return h('span', { class: `av av-${size} tone-${toneOf(personaId)}`, 'aria-hidden': 'true', text: initialOf(personaId) })
+}
+function latestImageOf(personaId) {
+  return S.gallery.find((img) => img.character_id === personaId) || null
+}
+function arch(personaId, label) {
+  const p = persona(personaId)
+  const box = h('div', { class: 'arch' })
+  const img = latestImageOf(personaId)
+  if (img) {
+    box.append(h('img', { src: url(img.image_url), alt: `Ảnh gần nhất của ${nameOf(personaId)}`, loading: 'lazy' }))
+  } else {
+    box.append(h('span', { class: 'ini', 'aria-hidden': 'true', text: initialOf(personaId) }))
+    if (label) box.append(h('small', { text: label }))
+  }
+  return box
+}
+
+function parseDate(value) { const d = value ? new Date(value) : new Date(); return isNaN(d) ? new Date() : d }
+function sameDay(a, b) { return a.toDateString() === b.toDateString() }
+function dayLabel(value) {
+  const d = parseDate(value)
+  const today = new Date()
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
+  if (sameDay(d, today)) return 'Hôm nay'
+  if (sameDay(d, yesterday)) return 'Hôm qua'
+  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+function timeLabel(value) { return parseDate(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }
+function shortWhen(value) {
+  const d = parseDate(value)
+  const label = dayLabel(value)
+  if (label === 'Hôm nay') return timeLabel(value)
+  if (label === 'Hôm qua') return 'Hôm qua'
+  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
+}
+function fullWhen(value) { return `${dayLabel(value)}, ${timeLabel(value)}` }
+function mmss(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+function durationLabel(ms) {
+  const total = Math.max(1, Math.round(ms / 1000))
+  if (total < 60) return `${total} giây`
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return seconds ? `${minutes} phút ${seconds} giây` : `${minutes} phút`
+}
+function lastMessageLabel(value) {
+  if (!value) return 'Chưa có tin nhắn'
+  try {
+    const data = JSON.parse(value)
+    if (data && data.image_id) return 'Đã gửi một ảnh'
+  } catch (e) {}
+  return value
+}
+function capFirst(text) { const s = String(text || ''); return s.charAt(0).toLocaleUpperCase('vi-VN') + s.slice(1) }
+function styleLabel(value) { return STYLES.find((s) => s.value === value)?.label || value || '—' }
+function qualityLabel(value) { return QUALITIES.find((q) => q.value === value)?.label || value || '—' }
+function modelLabel(value) { return (value || '—').replace(/\.(safetensors|ckpt|pt|pth|bin)$/i, '') }
+function metaOf(img) { try { return JSON.parse(img.metadata_json || '{}') || {} } catch (e) { return {} } }
+function slugKey(text) {
+  const slug = String(text).normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48)
+  return slug || 'ghi_chu_' + Date.now().toString(36)
+}
+
+let toastTimer = null
+function toast(message) {
+  const box = $('#toast')
+  box.textContent = message
+  box.hidden = false
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { box.hidden = true }, 4500)
+}
+
+// ════════════════════════════════════════
+// ĐIỀU HƯỚNG
+// ════════════════════════════════════════
+function go(screen, opts = {}) {
+  const hash = '#' + HASHES[screen]
+  // pushState không bắn hashchange, nên màn hình đổi ngay tại đây và người gọi tự
+  // quyết focus đi đâu (vd. vào ô nhập tin nhắn sau khi tạo hội thoại).
+  if (location.hash !== hash) history.pushState(null, '', hash)
+  showScreen(screen, opts)
+}
+
+function route() {
+  const screen = ROUTES[location.hash.slice(1)] || 'chat'
+  if (screen !== document.body.dataset.screen) showScreen(screen)
+}
+
+function showScreen(screen, { focus = true } = {}) {
+  document.body.dataset.screen = screen
+  for (const section of document.querySelectorAll('.screen')) section.hidden = section.dataset.screen !== screen
+  for (const link of document.querySelectorAll('[data-nav]')) {
+    if (link.dataset.nav === screen) link.setAttribute('aria-current', 'page')
+    else link.removeAttribute('aria-current')
+  }
+  document.title = TITLES[screen]
+  closeDrawers()
+  if (screen === 'studio') renderStudio()
+  if (screen === 'gallery') { renderGallery(); loadGallery().then(renderGallery) }
+  if (screen === 'characters') renderCharacters()
+  if (screen === 'chat') renderChat()
+  if (focus) {
+    const heading = document.querySelector(`.screen[data-screen="${screen}"] h1`)
+    if (heading) heading.focus({ preventScroll: true })
+  }
+}
+
+function openDrawer(el) {
+  el.classList.add('open')
+  $('#scrim').hidden = false
+}
+function closeDrawers() {
+  $('#sidebar').classList.remove('open')
+  $('#panel').classList.remove('open')
+  $('#scrim').hidden = true
+}
+const isNarrow = () => window.matchMedia('(max-width: 900px)').matches
+
+// ════════════════════════════════════════
+// SỐ ĐO THẬT TRÊN MÁY NÀY (GET /api/stats, lộ trình P3.5)
+// ════════════════════════════════════════
+async function loadStats() {
+  try { S.stats = await api('/api/stats') } catch (e) { return }
+  if (document.body.dataset.screen === 'studio' && !S.drawing) renderStudio()
+}
+
+// Thời gian vẽ trung vị đã đo được cho đúng preset chất lượng + phóng to, hoặc null.
+function typicalDraw(quality, upscale) {
+  const preset = S.stats?.image?.presets?.find((p) => p.quality === quality && p.upscale === upscale)
+  const spread = preset?.total_s
+  return spread && spread.n ? { ms: spread.median * 1000, n: spread.n } : null
+}
+
+function elapsedLine() {
+  const text = `Đã chạy ${mmss(Date.now() - S.drawStart)}`
+  const usual = S.drawPreset && typicalDraw(S.drawPreset.quality, S.drawPreset.upscale)
+  return usual ? `${text} · thường khoảng ${mmss(usual.ms)}` : text
+}
+
+// ════════════════════════════════════════
+// TRẠNG THÁI DỊCH VỤ
+// ════════════════════════════════════════
+async function checkHealth() {
+  try {
+    const res = await fetch(API + '/health', { signal: AbortSignal.timeout(4000) })
+    const data = await res.json()
+    S.health = { backend: true, ollama: data.ollama === true, comfy: data.comfyui === true }
+  } catch (e) {
+    S.health = { backend: false, ollama: false, comfy: false }
+  }
+  renderStatus()
+}
+
+function setStatus(dotId, textId, kind, text) {
+  $(dotId).className = 'dot' + (kind ? ' ' + kind : '')
+  $(textId).textContent = text
+}
+
+function renderStatus() {
+  const hl = S.health
+  if (hl.backend === false) {
+    setStatus('#st-chat-dot', '#st-chat', '', 'Máy chủ YumeAI · chưa chạy')
+    setStatus('#st-draw-dot', '#st-draw', '', 'Bộ vẽ (ComfyUI) · chưa rõ')
+  } else {
+    if (S.drawing) setStatus('#st-chat-dot', '#st-chat', 'wait', 'Trò chuyện (Ollama) · nhường GPU cho bộ vẽ')
+    else setStatus('#st-chat-dot', '#st-chat', hl.ollama ? 'ok' : '', `Trò chuyện (Ollama) · ${hl.ollama ? 'sẵn sàng' : 'chưa chạy'}`)
+    if (S.drawing) setStatus('#st-draw-dot', '#st-draw', 'busy', 'Bộ vẽ (ComfyUI) · đang vẽ')
+    else setStatus('#st-draw-dot', '#st-draw', hl.comfy ? 'ok' : '', `Bộ vẽ (ComfyUI) · ${hl.comfy ? 'sẵn sàng' : 'chưa chạy'}`)
+  }
+  renderChatNotice()
+}
+
+function renderChatNotice() {
+  const box = $('#chat-notice')
+  let text = ''
+  if (S.health.backend === false) text = 'Không kết nối được máy chủ YumeAI. Chạy python main.py rồi tải lại trang.'
+  else if (S.health.backend && !S.health.ollama) text = 'Ollama chưa chạy nên chưa trò chuyện được. Mở Ollama (ollama serve) rồi thử lại.'
+  else if (S.drawing) text = 'Đang vẽ ảnh — GPU đang bận nên câu trả lời có thể chậm hơn thường lệ.'
+  box.textContent = text
+  box.hidden = !text
+  updateComposer()
+}
+
+// ════════════════════════════════════════
+// HỘI THOẠI
+// ════════════════════════════════════════
+async function fetchConversations() {
+  const data = await api('/api/conversations' + qs({ user_id: USER }))
+  S.conversations = data.conversations || []
+  renderConversations()
+}
+
+function renderConversations() {
+  const list = $('#conv-list')
+  list.replaceChildren()
+  const needle = S.search.trim().toLocaleLowerCase('vi-VN')
+  const rows = S.conversations.filter((c) => {
+    if (!needle) return true
+    const hay = `${c.title} ${c.character_name} ${lastMessageLabel(c.last_message)}`.toLocaleLowerCase('vi-VN')
+    return hay.includes(needle)
+  })
+  if (!rows.length) {
+    list.append(h('p', { class: 'conv-empty', text: S.conversations.length ? 'Không tìm thấy hội thoại phù hợp.' : 'Chưa có cuộc trò chuyện nào.' }))
+    return
+  }
+  let group = null
+  for (const conv of rows) {
+    const label = dayLabel(conv.updated_at)
+    const groupName = label === 'Hôm nay' || label === 'Hôm qua' ? label : 'Trước đó'
+    if (groupName !== group) {
+      group = groupName
+      list.append(h('h2', { class: 'eyebrow conv-group', text: groupName }))
     }
+    const active = conv.id === S.conversationId
+    list.append(h('button', {
+      type: 'button', class: 'conv', 'aria-current': active ? 'true' : null,
+      onclick: async () => {
+        const ok = await openConversation(conv.id)
+        if (ok && document.body.dataset.screen !== 'chat') go('chat', { focus: false })
+        closeDrawers()
+        if (ok) $('#chat-input').focus()
+      },
+    },
+      avatar(conv.character_id, 'md'),
+      h('span', { class: 'conv-text' },
+        h('span', { class: 'conv-top' },
+          h('span', { class: 'conv-title', text: conv.title || conv.character_name }),
+          h('span', { class: 'conv-time', text: shortWhen(conv.updated_at) })),
+        h('span', { class: 'conv-last', text: `${conv.character_name}: ${lastMessageLabel(conv.last_message)}` }))))
+  }
+}
 
-    btn.disabled = false
-  },
-
-  // ── Helpers ────────────────────
-  qs(txt) {
-    document.getElementById('chat-inp').value = txt
-    UI.send()
-  },
-
-  resize(el) {
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 100) + 'px'
-  },
-
-  handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); UI.send() }
-  },
-
-  openLB(src) {
-    document.getElementById('lb-img').src = src
-    document.getElementById('lb').classList.add('show')
-  },
-
-  closeLB() {
-    document.getElementById('lb').classList.remove('show')
-  },
-
-  // ── Private helpers ────────────
-  _addMsg(role, txt, createdAt = null) {
-    const msgs = document.getElementById('messages')
-    const t    = UI._messageTime(createdAt)
-    const row  = document.createElement('div')
-    row.className = 'mrow' + (role === 'user' ? ' user' : '')
-
-    if (role === 'user') {
-      row.innerHTML = `
-        <div class="mav uav2">M</div>
-        <div class="mbody">
-          <div class="bubble user"></div>
-          <div class="mtime">${t}</div>
-        </div>`
-      row.querySelector('.bubble').textContent = txt
-    } else {
-      row.innerHTML = `
-        <div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
-        <div class="mbody">
-          <div class="bubble char stream-bbl"></div>
-          <div class="mtime">${t}</div>
-        </div>`
-      row.querySelector('.bubble').textContent = txt
+async function openConversation(id) {
+  try {
+    const data = await api(`/api/conversations/${encodeURIComponent(id)}` + qs({ user_id: USER }))
+    S.conversationId = id
+    S.personaId = data.conversation.character_id
+    S.messages = data.messages || []
+    S.facts = []; S.memoryInfo = null; S.memoryError = ''
+    S.editingKey = null; S.confirmKey = null; S.adding = false
+    lsSet(LS_CONV, id)
+    renderConversations()
+    renderChat()
+    loadMemory()
+    return true
+  } catch (e) {
+    if (e.status === 404) {
+      // Hội thoại đã nhớ trong trình duyệt không còn (DB mới, máy khác) — quên nó đi.
+      if (S.conversationId === id) { S.conversationId = null; lsSet(LS_CONV, null) }
+      return false
     }
-    msgs.appendChild(row)
-    UI._scroll()
-    return row
-  },
+    toast('Không mở được cuộc trò chuyện: ' + e.message)
+    return false
+  }
+}
 
-  _addImage(src, prompt, createdAt = null) {
-    const msgs = document.getElementById('messages')
-    const row  = document.createElement('div')
-    row.className = 'mrow'
-
-    const safePrompt = String(prompt).replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-    row.innerHTML = `
-      <div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
-      <div class="mbody">
-        <div class="bubble char">Đây là ảnh đã tạo theo yêu cầu.</div>
-        <div class="bimg">
-          <img alt="Generated" style="background:var(--surface);min-height:200px">
-          <div class="icap">✨ ${safePrompt}</div>
-        </div>
-        <div class="mtime">${UI._messageTime(createdAt)}</div>
-      </div>`
-
-    const img = row.querySelector('img')
-    img.onclick = () => UI.openLB(src)
-    img.onload  = () => UI._scroll()
-    img.onerror = () => {
-      img.parentElement.innerHTML = '<div style="padding:20px;color:#f87171;font-size:12px;text-align:center">⚠️ Không hiển thị được ảnh</div>'
-    }
-    img.src = src  // set src CUỐI CÙNG để onload/onerror đăng ký trước
-
-    msgs.appendChild(row)
-    UI._scroll()
-  },
-
-  _showTyping() {
-    const msgs = document.getElementById('messages')
-    const row  = document.createElement('div')
-    row.className = 'mrow'; row.id = 'trow'
-    row.innerHTML = `<div class="mav char">${ICONS[STATE.personaId] || '✦'}</div>
-      <div class="mbody"><div class="bubble typing">
-        <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
-      </div></div>`
-    msgs.appendChild(row)
-    UI._scroll()
-  },
-
-  _removeTyping() {
-    const el = document.getElementById('trow')
-    if (el) el.remove()
-  },
-
-  _addErr(msg) {
-    const msgs = document.getElementById('messages')
-    const d    = document.createElement('div')
-    d.className = 'err'
-    d.textContent = '⚠️ ' + msg
-    msgs.appendChild(d)
-    UI._scroll()
-  },
-
-  _scroll() {
-    const m = document.getElementById('messages')
-    m.scrollTop = m.scrollHeight
-  },
-
-  _now() {
-    return new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-  },
-
-  _messageTime(value) {
-    if (!value) return UI._now()
-    return new Date(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-  },
-
-  _shortDate(value) {
-    if (!value) return ''
-    const date = new Date(value)
-    const today = new Date()
-    if (date.toDateString() === today.toDateString()) {
-      return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-    }
-    return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
-  },
-
-  _lastMessageLabel(value) {
-    if (!value) return 'Chưa có tin nhắn'
-    try {
-      const data = JSON.parse(value)
-      if (data.image_id) return `Ảnh: ${data.prompt || 'đã tạo'}`
-    } catch (err) {}
-    return value
-  },
-
-  _absoluteUrl(value) {
-    if (!value || /^https?:\/\//.test(value) || value.startsWith('data:')) return value
-    return `${CFG.API}${value.startsWith('/') ? '' : '/'}${value}`
-  },
-
-  _delay(ms) {
-    return new Promise(r => setTimeout(r, ms))
+async function startConversation(personaId) {
+  try {
+    const conv = await api('/api/conversations', { method: 'POST', json: { user_id: USER, user_name: USER_NAME, persona_id: personaId } })
+    await fetchConversations()
+    await openConversation(conv.id)
+    go('chat', { focus: false })
+    $('#chat-input').focus()
+  } catch (e) {
+    toast(`Không tạo được cuộc trò chuyện với ${nameOf(personaId)}: ${e.message}`)
   }
 }
 
 // ════════════════════════════════════════
-// INIT
+// MÀN TRÒ CHUYỆN
 // ════════════════════════════════════════
-UI.init()
-setInterval(() => UI.checkHealth(), 30000)
+function renderChat() {
+  const p = persona(S.personaId)
+  const tone = toneOf(S.personaId)
+  const av = $('#chat-av')
+  av.className = `av av-lg tone-${tone}`
+  av.textContent = p ? initialOf(p.id) : '✦'
+  $('#chat-name').textContent = p ? p.name : 'YumeAI'
+  $('#chat-sub').textContent = p ? subOf(p) : 'Chọn một nhân vật để bắt đầu'
+  $('#draw-label').textContent = p ? `Vẽ ${p.name}` : 'Tạo ảnh'
+  const input = $('#chat-input')
+  input.placeholder = p ? `Nhắn cho ${p.name}...` : 'Chọn nhân vật trước đã...'
+  $('#chat-input-label').textContent = p ? `Tin nhắn cho ${p.name}` : 'Tin nhắn'
+  $('#delete-conv').hidden = !S.conversationId
+  renderMessages()
+  renderSuggests()
+  renderProfile()
+  renderMemory()
+  updateComposer()
+}
+
+function renderMessages() {
+  const box = $('#messages-inner')
+  box.replaceChildren()
+  if (!S.conversationId) {
+    box.append(h('div', { class: 'empty-chat' },
+      h('h2', { class: 'display', text: 'Chưa có cuộc trò chuyện nào' }),
+      h('p', { class: 'muted', style: 'margin:0', text: 'Chọn một nhân vật để bắt đầu. Cuộc trò chuyện và ký ức đều được lưu trên máy này.' }),
+      h('button', { type: 'button', class: 'btn btn-primary', onclick: () => go('characters') }, icon('people', 18), 'Chọn nhân vật')))
+    return
+  }
+  let lastDay = null
+  for (const msg of S.messages) {
+    const day = dayLabel(msg.created_at)
+    if (day !== lastDay) { lastDay = day; box.append(h('div', { class: 'day', text: day })) }
+    box.append(messageNode(msg))
+  }
+  scrollToBottom()
+}
+
+function messageNode(msg) {
+  if (msg.content_type === 'image') {
+    let data = null
+    try { data = JSON.parse(msg.content) } catch (e) {}
+    if (!data || !data.image_url) return h('p', { class: 'note note-error', text: 'Một ảnh cũ có dữ liệu không hợp lệ.' })
+    return h('div', { class: 'msg' },
+      avatar(S.personaId, 'sm'),
+      h('div', { class: 'stack' }, imageFigure(data.image_url, data.prompt || 'Ảnh đã vẽ'), h('span', { class: 'time', text: timeLabel(msg.created_at) })))
+  }
+  return textMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content, msg.created_at)
+}
+
+function textMessage(role, text, time) {
+  const bubble = h('p', { class: 'bubble', text })
+  if (role === 'user') return h('div', { class: 'msg me' }, bubble, h('span', { class: 'time', text: timeLabel(time) }))
+  return h('div', { class: 'msg' }, avatar(S.personaId, 'sm'), h('div', { class: 'stack' }, bubble, h('span', { class: 'time', text: timeLabel(time) })))
+}
+
+function imageFigure(imageUrl, prompt) {
+  const src = url(imageUrl)
+  const img = h('img', { src, alt: prompt, loading: 'lazy' })
+  img.addEventListener('error', () => { img.replaceWith(h('span', { class: 'note note-error', style: 'display:block;margin:12px', text: 'Không hiển thị được ảnh (file có thể đã bị xoá).' })) })
+  img.addEventListener('load', () => scrollToBottom())
+  return h('figure', { class: 'shot' },
+    h('button', { type: 'button', class: 'shot-open', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, prompt) }, img),
+    h('figcaption', null,
+      h('span', { text: prompt }),
+      h('span', { style: 'display:flex;gap:2px;flex:0 0 auto' },
+        h('a', { class: 'icon-btn', href: src, download: '', 'aria-label': 'Tải ảnh xuống' }, icon('download', 18)),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, prompt) }, icon('expand', 18)))))
+}
+
+function scrollToBottom() {
+  const box = $('#messages')
+  box.scrollTop = box.scrollHeight
+}
+
+function appendToLog(node) {
+  $('#messages-inner').append(node)
+  scrollToBottom()
+}
+
+function addError(message) {
+  appendToLog(h('p', { class: 'note note-error', role: 'alert', text: message }))
+}
+
+function renderSuggests() {
+  const box = $('#suggests')
+  box.replaceChildren()
+  const p = persona(S.personaId)
+  if (!p || !S.conversationId) return
+  const items = ['Hôm nay thế nào rồi?', ...(p.likes || []).slice(0, 2).map((like) => `Kể chuyện ${like} đi`)]
+  for (const text of items) {
+    box.append(h('button', { type: 'button', text, onclick: () => send(text) }))
+  }
+}
+
+function updateComposer() {
+  const disabled = S.busy || !S.conversationId || S.health.backend === false || (S.health.backend && !S.health.ollama)
+  $('#send-btn').disabled = disabled
+  for (const b of document.querySelectorAll('#suggests button')) b.disabled = disabled
+}
+
+function autosize(el) {
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+}
+
+async function send(text) {
+  if (S.busy) return
+  const input = $('#chat-input')
+  const message = String(text ?? input.value).trim()
+  if (!message) return
+  if (!S.conversationId) { go('characters'); return }
+  if (S.health.backend === false) { addError('Máy chủ YumeAI chưa chạy.'); return }
+  if (!S.health.ollama) { addError('Ollama chưa chạy. Mở Ollama (ollama serve) rồi thử lại.'); return }
+
+  const conversationId = S.conversationId
+  const personaId = S.personaId
+  if (text == null) { input.value = ''; autosize(input) }
+  const restore = () => { if (!input.value) { input.value = message; autosize(input) } }
+  S.busy = true
+  updateComposer()
+  const sentAt = new Date().toISOString()
+  appendToLog(textMessage('user', message, sentAt))
+  const typing = h('div', { class: 'msg', id: 'typing' }, avatar(personaId, 'sm'),
+    h('p', { class: 'bubble typing', 'aria-label': `${nameOf(personaId)} đang trả lời` }, h('i'), h('i'), h('i')))
+  appendToLog(typing)
+
+  try {
+    // Hỏi trước: câu này là trò chuyện hay xin ảnh? Dùng chung bộ định tuyến với Gradio.
+    // Lỗi ở bước này thì cứ trả lời như trò chuyện — đừng để nhân vật im lặng.
+    let intent = { task: 'chat' }
+    try {
+      intent = await api('/api/chat/intent', { method: 'POST', json: { message, persona_id: personaId, style: S.studio.style } })
+    } catch (e) {}
+    if (intent.task === 'text2img') {
+      typing.remove()
+      await drawInChat({ message, sentAt, conversationId, personaId, style: intent.style || S.studio.style, restore })
+      return
+    }
+    await streamReply({ message, sentAt, conversationId, personaId, typing, restore })
+  } finally {
+    typing.remove()
+    S.busy = false
+    updateComposer()
+    input.focus()
+  }
+}
+
+async function streamReply({ message, sentAt, conversationId, personaId, typing, restore }) {
+  let reply = ''
+  let bubble = null
+  try {
+    const res = await fetch(API + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, persona_id: personaId, user_id: USER, user_name: USER_NAME, conversation_id: conversationId }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try { detail = (await res.json()).detail || '' } catch (e) {}
+      throw new Error(typeof detail === 'string' && detail ? detail : `Máy chủ trả lỗi ${res.status}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+      const events = buffer.split(/\r?\n\r?\n/)
+      buffer = events.pop() || ''
+      for (const event of events) {
+        const line = event.split(/\r?\n/).find((x) => x.startsWith('data: '))
+        if (!line) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        if (payload.token) {
+          reply += payload.token
+          if (S.conversationId !== conversationId) continue
+          if (!bubble) {
+            typing.remove()
+            const node = textMessage('assistant', '', null)
+            bubble = node.querySelector('.bubble')
+            appendToLog(node)
+          }
+          bubble.textContent = reply
+          scrollToBottom()
+        }
+      }
+      if (done) break
+    }
+    typing.remove()
+    if (!reply) throw new Error('Nhân vật không trả lời (câu trả lời rỗng).')
+    if (S.conversationId === conversationId) {
+      S.messages.push({ role: 'user', content: message, content_type: 'text', created_at: sentAt })
+      S.messages.push({ role: 'assistant', content: reply, content_type: 'text', created_at: new Date().toISOString() })
+    }
+    fetchConversations().catch(() => {})
+  } catch (e) {
+    typing.remove()
+    if (bubble && !reply) bubble.closest('.msg').remove()
+    // Máy chủ chỉ lưu lượt chat khi đã có câu trả lời, nên lượt lỗi chưa được lưu.
+    addError(`Lỗi trò chuyện: ${e.message}. Tin nhắn chưa được lưu — bạn có thể gửi lại.`)
+    restore()
+  }
+}
+
+/** Người dùng xin ảnh ngay trong khung chat ("vẽ cho anh một tấm..."). */
+async function drawInChat({ message, sentAt, conversationId, personaId, style, restore }) {
+  const name = nameOf(personaId)
+  if (S.drawing) {
+    addError('Bộ vẽ đang bận với một ảnh khác. Đợi ảnh đó xong rồi nhắn lại nhé.')
+    restore()
+    return
+  }
+  if (!S.health.comfy) {
+    addError(`${name} chưa vẽ được vì ComfyUI chưa chạy. Mở ComfyUI rồi nhắn lại. Tin nhắn chưa được lưu.`)
+    restore()
+    return
+  }
+  const elapsed = h('span', { class: 'time', text: 'Đã chạy 00:00' })
+  const card = h('div', { class: 'msg' }, avatar(personaId, 'sm'),
+    h('div', { class: 'stack' },
+      h('div', { class: 'bubble drawing' },
+        h('span', { class: 'live' }, h('span', { class: 'dot' }), `${name} đang vẽ`),
+        h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${name} đang vẽ`, 'aria-valuetext': 'Đang vẽ' }, h('i')),
+        h('span', { class: 'help', text: `${styleLabel(style)} · ${qualityLabel(S.studio.quality)}. Xong ảnh sẽ hiện ở đây.` })),
+      elapsed))
+  appendToLog(card)
+
+  S.drawing = true
+  S.drawStart = Date.now()
+  S.drawPreset = { quality: S.studio.quality, upscale: S.studio.upscale }
+  S.drawLabel = `${name} · ${styleLabel(style)}`
+  elapsed.textContent = elapsedLine()
+  renderStatus()
+  scrollToBottom()   // dòng thông báo "đang vẽ" vừa hiện làm khung tin nhắn ngắn lại
+  const timer = setInterval(() => { elapsed.textContent = elapsedLine() }, 1000)
+  try {
+    const data = await api('/api/images/generate', {
+      method: 'POST',
+      json: {
+        prompt: message,
+        chat_message: message,
+        persona_id: personaId,
+        user_id: USER,
+        conversation_id: conversationId,
+        style,
+        quality: S.studio.quality,
+        upscale: S.studio.upscale,
+        enrich: true,
+        include_base64: false,
+      },
+    })
+    card.remove()
+    if (S.conversationId === conversationId) {
+      S.messages.push({ role: 'user', content: message, content_type: 'text', created_at: sentAt })
+      const imageMessage = {
+        role: 'assistant', content_type: 'image', created_at: new Date().toISOString(),
+        content: JSON.stringify({ image_id: data.image_id, image_url: data.image_url, prompt: message }),
+      }
+      S.messages.push(imageMessage)
+      appendToLog(messageNode(imageMessage))
+      if (data.warning) appendToLog(h('p', { class: 'note note-info', text: data.warning }))
+    }
+    loadGallery().then(() => { if (S.personaId === personaId) renderProfile() })
+    fetchConversations().catch(() => {})
+    loadStats()
+  } catch (e) {
+    card.remove()
+    addError(e.status === 429
+      ? 'Bộ vẽ đang bận với một ảnh khác (có thể đang chạy từ Gradio). Đợi xong rồi nhắn lại nhé. Tin nhắn chưa được lưu.'
+      : `${name} không vẽ được: ${e.message}. Tin nhắn chưa được lưu — bạn có thể gửi lại.`)
+    restore()
+  } finally {
+    clearInterval(timer)
+    S.drawing = false
+    renderStatus()
+    if (document.body.dataset.screen === 'studio') renderStudio()
+  }
+}
+
+// ── Hồ sơ ──────────────────────────────────
+function renderProfile() {
+  const p = persona(S.personaId)
+  const tone = toneOf(S.personaId)
+  const box = $('#profile')
+  box.className = `profile tone-${tone}`
+  box.replaceChildren()
+  $('#likes-sec').className = `panel-sec tone-${tone}`
+  const likes = $('#likes')
+  likes.replaceChildren()
+  if (!p) {
+    box.append(h('p', { text: 'Chưa chọn nhân vật.' }))
+    $('#likes-title').textContent = 'Sở thích'
+    return
+  }
+  box.append(
+    arch(p.id, 'Chưa có ảnh — vẽ một tấm ở “Tạo ảnh”'),
+    h('h2', { class: 'display', text: p.name }),
+    h('p', { text: subOf(p) }))
+  $('#likes-title').textContent = `${p.name} thích`
+  for (const like of p.likes || []) likes.append(h('li', { text: capFirst(like) }))
+}
+
+// ── Ký ức ──────────────────────────────────
+async function loadMemory() {
+  const personaId = S.personaId
+  if (!personaId) return
+  try {
+    const data = await api('/api/memory' + qs({ user_id: USER, persona_id: personaId }))
+    if (personaId !== S.personaId) return
+    S.facts = data.facts || []
+    S.memoryInfo = data
+    S.memoryError = ''
+  } catch (e) {
+    S.facts = []
+    S.memoryError = 'Không tải được ký ức: ' + e.message
+  }
+  renderMemory()
+}
+
+function renderMemory() {
+  const p = persona(S.personaId)
+  $('#memory-title').textContent = p ? `${p.name} nhớ về bạn` : 'Ký ức'
+  $('#memory-count').textContent = S.facts.length ? `${S.facts.length} điều` : ''
+  const list = $('#facts')
+  list.replaceChildren()
+  if (S.memoryError) list.append(h('li', null, h('p', { class: 'note note-error', text: S.memoryError })))
+  else if (!S.facts.length && p) list.append(h('li', null, h('p', { class: 'small-note', text: `${p.name} chưa ghi nhớ điều gì về bạn. Cứ trò chuyện, hoặc tự thêm bên dưới.` })))
+
+  for (const fact of S.facts) {
+    const label = fact.fact_key.replaceAll('_', ' ')
+    if (S.editingKey === fact.fact_key) {
+      const input = h('input', { class: 'input', id: 'fact-edit-input', value: fact.fact_value, 'aria-label': `Nội dung: ${label}` })
+      const form = h('form', { class: 'fact-form', onsubmit: (e) => { e.preventDefault(); saveFact(fact.fact_key, input.value) } },
+        h('label', { for: 'fact-edit-input', text: label }), input,
+        h('div', { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn', text: 'Huỷ', onclick: () => { S.editingKey = null; renderMemory() } }),
+          h('button', { type: 'submit', class: 'btn btn-primary', text: 'Lưu' })))
+      list.append(h('li', null, form))
+      setTimeout(() => input.focus(), 0)
+      continue
+    }
+    if (S.confirmKey === fact.fact_key) {
+      list.append(h('li', { class: 'fact-confirm' },
+        h('p', { text: `Xoá “${fact.fact_value}” khỏi ký ức?` }),
+        h('div', { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn', text: 'Giữ lại', onclick: () => { S.confirmKey = null; renderMemory() } }),
+          h('button', { type: 'button', class: 'btn btn-danger', text: 'Xoá', onclick: () => deleteFact(fact.fact_key) }))))
+      continue
+    }
+    list.append(h('li', { class: 'fact' },
+      h('span', { class: 'fact-text' }, h('small', { text: label }), h('span', { text: fact.fact_value })),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Sửa: ${fact.fact_value}`, onclick: () => { S.editingKey = fact.fact_key; S.confirmKey = null; renderMemory() } }, icon('pencil', 18)),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Xoá: ${fact.fact_value}`, onclick: () => { S.confirmKey = fact.fact_key; S.editingKey = null; renderMemory() } }, icon('trash', 18))))
+  }
+
+  const add = $('#fact-add')
+  add.replaceChildren()
+  if (!p) return
+  if (S.adding) {
+    const topic = h('input', { class: 'input', id: 'fact-topic', placeholder: 'Ví dụ: đồ uống yêu thích', autocomplete: 'off' })
+    const value = h('input', { class: 'input', id: 'fact-value', placeholder: 'Ví dụ: trà đào ít đường', autocomplete: 'off' })
+    add.append(h('form', { class: 'fact-form', onsubmit: (e) => { e.preventDefault(); addFact(topic.value, value.value) } },
+      h('label', { for: 'fact-topic', text: 'Chủ đề' }), topic,
+      h('label', { for: 'fact-value', text: `${p.name} nên nhớ điều gì?` }), value,
+      h('div', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'btn', text: 'Huỷ', onclick: () => { S.adding = false; renderMemory() } }),
+        h('button', { type: 'submit', class: 'btn btn-primary', text: 'Lưu' }))))
+    setTimeout(() => topic.focus(), 0)
+  } else {
+    add.append(h('button', { type: 'button', class: 'btn btn-dashed btn-block', onclick: () => { S.adding = true; S.editingKey = null; S.confirmKey = null; renderMemory() } }, icon('plus', 18), 'Thêm điều cần nhớ'))
+  }
+  const info = S.memoryInfo
+  $('#memory-note').textContent = info && info.auto_extraction
+    ? `${p.name} tự ghi nhớ sau mỗi ${info.extraction_every_messages} tin nhắn. Sửa hoặc xoá nếu nhớ sai — mỗi nhân vật có ký ức riêng.`
+    : 'Tự ghi nhớ đang tắt; bạn vẫn có thể tự thêm. Mỗi nhân vật có ký ức riêng.'
+}
+
+async function saveFact(key, value) {
+  const text = String(value).trim()
+  if (!text) { toast('Nội dung không được để trống.'); return }
+  try {
+    await api(`/api/memory/${encodeURIComponent(key)}`, { method: 'PUT', json: { user_id: USER, persona_id: S.personaId, value: text, confidence: 1 } })
+    S.editingKey = null
+    S.adding = false
+    await loadMemory()
+    toast('Đã lưu vào ký ức.')
+  } catch (e) {
+    toast('Không lưu được: ' + e.message)
+  }
+}
+
+async function addFact(topic, value) {
+  if (!String(topic).trim() || !String(value).trim()) { toast('Hãy điền cả chủ đề và nội dung.'); return }
+  let key = slugKey(topic)
+  const taken = new Set(S.facts.map((f) => f.fact_key))
+  for (let i = 2; taken.has(key); i++) key = `${slugKey(topic)}_${i}`
+  await saveFact(key, value)
+}
+
+async function deleteFact(key) {
+  try {
+    await api(`/api/memory/${encodeURIComponent(key)}` + qs({ user_id: USER, persona_id: S.personaId }), { method: 'DELETE' })
+    S.confirmKey = null
+    await loadMemory()
+    toast('Đã xoá khỏi ký ức.')
+  } catch (e) {
+    toast('Không xoá được: ' + e.message)
+  }
+}
+
+function applyPanelState() {
+  const closed = lsGet(LS_PANEL) === '1'
+  document.body.classList.toggle('panel-closed', closed)
+  const btn = $('#panel-toggle')
+  btn.setAttribute('aria-expanded', String(!closed))
+  btn.setAttribute('aria-label', closed ? 'Hiện hồ sơ và ký ức' : 'Ẩn hồ sơ và ký ức')
+}
+
+function togglePanel() {
+  if (isNarrow()) { openDrawer($('#panel')); return }
+  lsSet(LS_PANEL, document.body.classList.contains('panel-closed') ? null : '1')
+  applyPanelState()
+}
+
+// ════════════════════════════════════════
+// MÀN TẠO ẢNH
+// ════════════════════════════════════════
+function openStudio(personaId, preset) {
+  if (personaId && persona(personaId)) S.studio.personaId = personaId
+  if (preset) {
+    if (preset.style) S.studio.style = preset.style
+    if (preset.quality) S.studio.quality = preset.quality
+    if (preset.prompt != null) $('#studio-prompt').value = preset.prompt
+  }
+  go('studio')
+}
+
+function attachAllowed() {
+  return Boolean(S.conversationId) && S.personaId === S.studio.personaId
+}
+
+function renderStudio() {
+  if (!S.studio.personaId || !persona(S.studio.personaId)) S.studio.personaId = S.personaId || S.personas[0]?.id || null
+  const p = persona(S.studio.personaId)
+
+  const people = $('#studio-personas')
+  people.replaceChildren()
+  if (!S.personas.length) people.append(h('p', { class: 'help', text: 'Chưa tải được danh sách nhân vật.' }))
+  for (const item of S.personas) {
+    people.append(h('button', {
+      type: 'button', class: 'choice', 'aria-pressed': String(item.id === S.studio.personaId),
+      onclick: () => { S.studio.personaId = item.id; renderStudio() },
+    }, avatar(item.id, 'md'), h('span', { text: item.name })))
+  }
+
+  const styles = $('#studio-styles')
+  styles.replaceChildren()
+  for (const style of STYLES) {
+    styles.append(h('button', {
+      type: 'button', 'aria-pressed': String(style.value === S.studio.style), text: style.label,
+      onclick: () => { S.studio.style = style.value; renderStudio() },
+    }))
+  }
+
+  const quality = $('#studio-quality')
+  quality.replaceChildren()
+  for (const q of QUALITIES) {
+    quality.append(h('button', {
+      type: 'button', 'aria-pressed': String(q.value === S.studio.quality),
+      onclick: () => { S.studio.quality = q.value; renderStudio() },
+    }, h('b', { text: q.label }), h('small', { text: q.sub })))
+  }
+
+  const upscale = $('#studio-upscale')
+  if (!upscale.options.length) {
+    for (const u of UPSCALES) upscale.append(h('option', { value: u.value, text: u.label }))
+  }
+  upscale.value = S.studio.upscale
+  $('#studio-enrich').checked = S.studio.enrich
+
+  const usual = typicalDraw(S.studio.quality, S.studio.upscale)
+  $('#studio-quality-help').textContent = usual
+    ? `Trên máy này, ảnh “${qualityLabel(S.studio.quality)}”${S.studio.upscale === UPSCALES[0].value ? '' : ' có phóng to'} thường mất khoảng ${durationLabel(usual.ms)} (đo từ ${usual.n}\u00a0ảnh gần đây).`
+    : 'Càng kỹ càng lâu. Trên GPU 4 GB, ảnh “Tốt nhất” có thể mất vài phút.'
+
+  const prompt = $('#studio-prompt')
+  prompt.placeholder = p ? `Ví dụ: ${p.name} ngồi bên cửa sổ lúc mưa đêm, ánh đèn bàn vàng ấm` : 'Tả cảnh muốn vẽ'
+  $('#studio-appearance-title').textContent = p ? `Ngoại hình cố định của ${p.name} (đã tự thêm)` : 'Ngoại hình cố định'
+  $('#studio-appearance').textContent = p?.appearance || '—'
+  $('#studio-appearance-box').hidden = !p || !p.appearance
+
+  const attachRow = $('#studio-attach-row')
+  attachRow.hidden = !attachAllowed()
+  $('#studio-attach').checked = S.studio.attach
+  $('#studio-attach-label').textContent = p ? `Gửi ảnh vào cuộc trò chuyện đang mở với ${p.name}` : 'Gửi ảnh vào cuộc trò chuyện đang mở'
+
+  const submit = $('#studio-submit')
+  submit.disabled = S.drawing || !p
+  submit.querySelector('span').textContent = S.drawing ? 'Đang vẽ…' : 'Bắt đầu vẽ'
+
+  renderStage()
+  renderRecent()
+}
+
+function renderStage() {
+  const frame = $('#stage-frame')
+  const info = $('#stage-info')
+  frame.replaceChildren()
+  info.replaceChildren()
+  const p = persona(S.studio.personaId)
+
+  if (S.drawing) {
+    frame.append(h('span', { text: 'Ảnh sẽ hiện ở đây khi vẽ xong' }))
+    info.append(
+      h('span', { class: 'live' }, h('span', { class: 'dot' }), 'Đang vẽ'),
+      h('h2', { class: 'display', text: S.drawLabel || 'Đang vẽ' }),
+      h('div', { class: 'bar', role: 'progressbar', 'aria-label': 'Đang vẽ', 'aria-valuetext': 'Đang vẽ' }, h('i')),
+      h('p', { class: 'meta-line', id: 'draw-elapsed', text: elapsedLine() }),
+      h('p', { class: 'help', text: 'Bộ vẽ đang làm việc. Cứ để trang mở — xong ảnh sẽ tự hiện và được lưu vào bộ sưu tập. Trong lúc này GPU nhường hết cho bộ vẽ.' }))
+    return
+  }
+
+  if (S.drawError) {
+    frame.append(h('span', { text: 'Chưa có ảnh' }))
+    info.append(h('p', { class: 'note note-error', role: 'alert', text: S.drawError }))
+    return
+  }
+
+  const r = S.drawResult
+  if (r) {
+    const src = url(r.image_url)
+    frame.append(h('button', { type: 'button', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, r.original_prompt) },
+      h('img', { src, alt: r.original_prompt })))
+    info.append(
+      h('span', { class: 'live', style: 'color:var(--mint)' }, 'Vẽ xong'),
+      h('h2', { class: 'display', text: r.original_prompt }),
+      h('p', { class: 'meta-line', text: [nameOf(r.persona_id), styleLabel(r.style), qualityLabel(r.quality), modelLabel(r.model_used), `hạt giống ${r.seed}`, `mất ${mmss(r.elapsed)}`].join(' · ') }))
+    if (r.warning) info.append(h('p', { class: 'note note-error', text: r.warning }))
+    if (r.attached) info.append(h('p', { class: 'help', text: `Ảnh đã được gửi vào cuộc trò chuyện với ${nameOf(r.persona_id)}.` }))
+    info.append(h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'btn', onclick: () => openLightbox(src, r.original_prompt) }, icon('expand', 18), 'Xem lớn'),
+      h('a', { class: 'btn', href: src, download: '' }, icon('download', 18), 'Tải xuống'),
+      h('button', { type: 'button', class: 'btn', onclick: () => draw() }, icon('redo', 18), 'Vẽ lại')))
+    return
+  }
+
+  frame.append(h('span', { text: 'Ảnh vừa vẽ sẽ hiện ở đây' }))
+  if (S.health.backend && !S.health.comfy) {
+    info.append(h('p', { class: 'note note-info', text: 'ComfyUI chưa chạy nên chưa vẽ được. Mở ComfyUI (chạy với --lowvram trên máy 4 GB) rồi thử lại.' }))
+  } else {
+    info.append(
+      h('h2', { class: 'display', text: 'Sẵn sàng vẽ' }),
+      h('p', { class: 'help', text: 'Tả cảnh ở bên trái — trang phục, ánh sáng, nơi chốn, cảm xúc. Ngoại hình của nhân vật được giữ cố định nên không cần tả lại.' }))
+  }
+}
+
+function renderRecent() {
+  const strip = $('#recent-strip')
+  strip.replaceChildren()
+  const items = S.gallery.slice(0, 8)
+  if (!items.length) { strip.append(h('p', { class: 'help', text: 'Chưa có ảnh nào.' })); return }
+  for (const img of items) {
+    strip.append(h('button', { type: 'button', 'aria-label': `Xem trong bộ sưu tập: ${img.prompt}`, onclick: () => { S.galleryId = img.id; S.galleryFilter = 'all'; go('gallery') } },
+      h('img', { src: url(img.image_url), alt: '', loading: 'lazy' })))
+  }
+}
+
+async function draw() {
+  if (S.drawing) return
+  const p = persona(S.studio.personaId)
+  const promptEl = $('#studio-prompt')
+  const prompt = promptEl.value.trim()
+  $('#studio-prompt-error').hidden = Boolean(prompt)
+  if (!p) return
+  if (!prompt) { promptEl.focus(); return }
+  if (S.health.backend === false) { S.drawError = 'Máy chủ YumeAI chưa chạy.'; renderStage(); return }
+  if (!S.health.comfy) { S.drawError = 'ComfyUI chưa chạy nên chưa vẽ được. Mở ComfyUI rồi thử lại.'; renderStage(); return }
+
+  const attach = S.studio.attach && attachAllowed()
+  const conversationId = attach ? S.conversationId : null
+  const settings = { style: S.studio.style, quality: S.studio.quality, upscale: S.studio.upscale, enrich: S.studio.enrich }
+  S.drawing = true
+  S.drawStart = Date.now()
+  S.drawPreset = { quality: settings.quality, upscale: settings.upscale }
+  S.drawLabel = `${p.name} · ${styleLabel(settings.style)}`
+  S.drawResult = null
+  S.drawError = ''
+  renderStudio()
+  renderStatus()
+  document.querySelector('.stage').scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  S.drawTimer = setInterval(() => {
+    const el = document.getElementById('draw-elapsed')
+    if (el) el.textContent = elapsedLine()
+  }, 1000)
+  try {
+    const data = await api('/api/images/generate', {
+      method: 'POST',
+      json: { prompt, persona_id: p.id, user_id: USER, conversation_id: conversationId, ...settings, include_base64: false },
+    })
+    S.drawResult = { ...data, persona_id: p.id, quality: settings.quality, attached: Boolean(conversationId), elapsed: Date.now() - S.drawStart }
+    toast('Vẽ xong — ảnh đã được lưu vào bộ sưu tập.')
+    loadGallery().then(() => { if (document.body.dataset.screen === 'studio') renderRecent() })
+    loadStats()
+    if (conversationId) {
+      fetchConversations().catch(() => {})
+      if (S.conversationId === conversationId) openConversation(conversationId)
+    }
+  } catch (e) {
+    S.drawError = e.status === 429
+      ? 'Bộ vẽ đang bận với một ảnh khác (có thể đang chạy từ Gradio). Đợi ảnh đó xong rồi thử lại.'
+      : `Vẽ không thành công: ${e.message}`
+  } finally {
+    clearInterval(S.drawTimer)
+    S.drawing = false
+    renderStatus()
+    if (document.body.dataset.screen === 'studio') renderStudio()
+  }
+}
+
+// ════════════════════════════════════════
+// MÀN BỘ SƯU TẬP
+// ════════════════════════════════════════
+async function loadGallery() {
+  try {
+    const data = await api('/api/gallery' + qs({ user_id: USER, limit: 300 }))
+    S.gallery = data.images || []
+    S.galleryError = ''
+  } catch (e) {
+    S.galleryError = 'Không tải được bộ sưu tập: ' + e.message
+  }
+}
+
+function galleryItems() {
+  let items = S.gallery
+  if (S.galleryFilter !== 'all') items = items.filter((img) => img.character_id === S.galleryFilter)
+  if (S.gallerySort === 'old') items = [...items].reverse()
+  return items
+}
+
+function renderGallery() {
+  const filters = $('#gallery-filters')
+  filters.replaceChildren()
+  const options = [['all', 'Tất cả', S.gallery.length], ...S.personas.map((p) => [p.id, p.name, S.gallery.filter((i) => i.character_id === p.id).length])]
+  for (const [id, label, count] of options) {
+    filters.append(h('button', {
+      type: 'button', 'aria-pressed': String(id === S.galleryFilter), text: `${label} · ${count}`,
+      onclick: () => { S.galleryFilter = id; renderGallery() },
+    }))
+  }
+  $('#gallery-sort').value = S.gallerySort
+
+  const grid = $('#gallery-grid')
+  grid.replaceChildren()
+  const items = galleryItems()
+  if (S.galleryError) grid.append(h('p', { class: 'note note-error', text: S.galleryError }))
+  if (!items.length && !S.galleryError) {
+    grid.append(h('div', { class: 'empty', style: 'grid-column:1 / -1' },
+      h('p', { style: 'margin:0', text: S.gallery.length ? 'Nhân vật này chưa có ảnh nào.' : 'Chưa có ảnh nào trong bộ sưu tập.' }),
+      h('button', { type: 'button', class: 'btn btn-primary', onclick: () => openStudio(S.galleryFilter !== 'all' ? S.galleryFilter : null) }, icon('sparkle', 18), 'Vẽ ảnh đầu tiên')))
+  }
+  if (!items.find((img) => img.id === S.galleryId)) S.galleryId = items[0]?.id || null
+  for (const img of items) {
+    grid.append(h('button', {
+      type: 'button', class: 'g-item', 'aria-pressed': String(img.id === S.galleryId),
+      onclick: () => { S.galleryId = img.id; renderGallery(); if (isNarrow()) $('#gallery-detail').scrollIntoView({ behavior: 'smooth' }) },
+    },
+      h('span', { class: 'g-thumb' }, h('img', { src: url(img.image_url), alt: img.prompt, loading: 'lazy' })),
+      h('span', { class: 'g-cap' }, avatar(img.character_id, 'xs'),
+        h('span', { class: 't' }, h('b', { text: img.prompt }), h('small', { text: `${styleLabel(img.style)} · ${shortWhen(img.created_at)}` })))))
+  }
+  renderGalleryDetail()
+}
+
+function renderGalleryDetail() {
+  const box = $('#gallery-detail')
+  box.replaceChildren()
+  const img = S.gallery.find((i) => i.id === S.galleryId)
+  if (!img) {
+    box.append(h('p', { class: 'help', text: 'Chọn một ảnh để xem chi tiết.' }))
+    return
+  }
+  const src = url(img.image_url)
+  const meta = metaOf(img)
+  const conv = img.conversation_id ? S.conversations.find((c) => c.id === img.conversation_id) : null
+  box.append(
+    h('button', { type: 'button', class: 'detail-frame', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, img.prompt) },
+      h('img', { src, alt: img.prompt })),
+    h('div', { style: 'display:flex;flex-direction:column;gap:2px' },
+      h('h2', { class: 'display', text: img.prompt }),
+      h('span', { class: 'meta-line', text: `${nameOf(img.character_id)} · ${fullWhen(img.created_at)}` })),
+    h('dl', { class: 'dl' },
+      h('div', null, h('dt', { text: 'Kiểu ảnh' }), h('dd', { text: styleLabel(img.style) })),
+      h('div', null, h('dt', { text: 'Chất lượng' }), h('dd', { text: qualityLabel(meta.quality) })),
+      h('div', null, h('dt', { text: 'Bộ vẽ' }), h('dd', { text: modelLabel(img.model_used) })),
+      h('div', null, h('dt', { text: 'Hạt giống' }), h('dd', { text: img.seed ?? '—' }))))
+  if (img.translated_prompt) {
+    box.append(h('details', { class: 'appearance' },
+      h('summary', { text: 'Lời tả gửi cho bộ vẽ' }),
+      h('p', { text: img.translated_prompt })))
+  }
+  if (meta.translation_ok === false) {
+    box.append(h('p', { class: 'note note-error', text: 'Lúc vẽ ảnh này không dịch được lời tả sang tiếng Anh, nên ảnh có thể lệch ý.' }))
+  }
+  box.append(h('div', { class: 'detail-actions' },
+    h('button', { type: 'button', class: 'btn btn-primary wide', onclick: () => openStudio(img.character_id, { prompt: img.prompt, style: img.style, quality: meta.quality }) }, icon('redo', 18), 'Vẽ lại với lời tả này'),
+    h('a', { class: 'btn', href: src, download: '' }, icon('download', 18), 'Tải xuống'),
+    h('button', { type: 'button', class: 'btn', onclick: () => openLightbox(src, img.prompt) }, icon('expand', 18), 'Xem lớn'),
+    conv ? h('button', { type: 'button', class: 'btn wide', onclick: async () => { if (await openConversation(conv.id)) go('chat') } }, icon('chat', 18), 'Mở cuộc trò chuyện chứa ảnh') : null,
+    h('button', { type: 'button', class: 'btn btn-danger wide', onclick: () => deleteImage(img) }, icon('trash', 18), 'Xoá ảnh này')))
+}
+
+// ════════════════════════════════════════
+// MÀN CHỌN NHÂN VẬT
+// ════════════════════════════════════════
+function renderCharacters() {
+  const grid = $('#char-grid')
+  grid.replaceChildren()
+  if (!S.personas.length) {
+    grid.append(h('p', { class: 'note note-error', text: S.health.backend === false ? 'Máy chủ YumeAI chưa chạy nên chưa tải được nhân vật.' : 'Chưa tải được danh sách nhân vật.' }))
+    return
+  }
+  for (const p of S.personas) {
+    const tone = toneOf(p.id)
+    const latest = S.conversations.find((c) => c.character_id === p.id)
+    const titleId = `char-${p.id}`
+    grid.append(h('article', { class: `char-card tone-${tone}`, 'aria-labelledby': titleId },
+      arch(p.id, `Chưa có ảnh của ${p.name}`),
+      h('div', { style: 'display:flex;flex-direction:column;gap:2px' },
+        h('h2', { class: 'display', id: titleId, text: p.name }),
+        h('span', { class: 'muted', style: 'font-size:15px', text: subOf(p) })),
+      p.greeting ? h('blockquote', { text: `“${p.greeting}”` }) : null,
+      (p.likes || []).length ? h('ul', { class: 'chips', 'aria-label': `${p.name} thích` }, ...(p.likes || []).map((like) => h('li', { text: capFirst(like) }))) : null,
+      h('div', { class: 'char-actions' },
+        h('button', { type: 'button', class: 'btn btn-tone', onclick: () => startConversation(p.id) }, icon('chat', 20), `Trò chuyện với ${p.name}`),
+        h('button', { type: 'button', class: 'btn', onclick: () => { S.galleryFilter = p.id; go('gallery') } }, `Xem ảnh của ${p.name}`)),
+      latest ? h('button', { type: 'button', class: 'linkish', onclick: async () => { if (await openConversation(latest.id)) go('chat') } }, 'Tiếp tục cuộc trò chuyện gần nhất') : null))
+  }
+}
+
+// ════════════════════════════════════════
+// XOÁ / XUẤT DỮ LIỆU
+// ════════════════════════════════════════
+/** Hộp hỏi lại trước khi xoá. Nút mặc định (được focus) là "Giữ lại". */
+function confirmAction({ title, text, ok = 'Xoá' }) {
+  const dialog = $('#confirm')
+  $('#confirm-title').textContent = title
+  $('#confirm-text').textContent = text
+  $('#confirm-ok').textContent = ok
+  dialog.returnValue = ''
+  dialog.showModal()
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true })
+  })
+}
+
+async function deleteImage(img) {
+  const yes = await confirmAction({
+    title: 'Xoá ảnh này?',
+    text: img.conversation_id
+      ? 'Ảnh sẽ biến mất khỏi bộ sưu tập và khỏi cuộc trò chuyện chứa nó. Không hoàn tác được.'
+      : 'Ảnh sẽ biến mất khỏi bộ sưu tập. Không hoàn tác được.',
+    ok: 'Xoá ảnh',
+  })
+  if (!yes) return
+  try {
+    await api(`/api/gallery/${encodeURIComponent(img.id)}` + qs({ user_id: USER }), { method: 'DELETE' })
+    S.gallery = S.gallery.filter((i) => i.id !== img.id)
+    if (S.galleryId === img.id) S.galleryId = null
+    if (S.drawResult && S.drawResult.image_id === img.id) S.drawResult = null
+    renderGallery()
+    if (img.conversation_id && img.conversation_id === S.conversationId) await openConversation(S.conversationId)
+    else renderProfile()
+    fetchConversations().catch(() => {})
+    toast('Đã xoá ảnh.')
+  } catch (e) {
+    toast('Không xoá được ảnh: ' + e.message)
+  }
+}
+
+async function deleteCurrentConversation() {
+  const id = S.conversationId
+  if (!id) return
+  const name = nameOf(S.personaId)
+  const yes = await confirmAction({
+    title: 'Xoá cuộc trò chuyện này?',
+    text: `Mọi tin nhắn trong cuộc trò chuyện này với ${name} sẽ mất, không hoàn tác được. Ảnh vẫn ở lại bộ sưu tập; ký ức của ${name} về bạn vẫn giữ — xoá trong bảng ký ức nếu muốn.`,
+    ok: 'Xoá cuộc trò chuyện',
+  })
+  if (!yes) return
+  try {
+    await api(`/api/conversations/${encodeURIComponent(id)}` + qs({ user_id: USER }), { method: 'DELETE' })
+    S.conversationId = null
+    S.messages = []
+    lsSet(LS_CONV, null)
+    await fetchConversations()
+    await loadGallery()
+    const next = S.conversations[0]
+    if (!(next && await openConversation(next.id))) {
+      S.personaId = null
+      renderChat()
+      go('characters')
+    }
+    toast('Đã xoá cuộc trò chuyện.')
+  } catch (e) {
+    toast('Không xoá được cuộc trò chuyện: ' + e.message)
+  }
+}
+
+function openDataDialog() {
+  $('#data-counts').textContent = `Hiện có ${S.conversations.length} cuộc trò chuyện và ${S.gallery.length} ảnh.`
+  $('#export-link').href = url('/api/data/export' + qs({ user_id: USER }))
+  $('#delete-confirm').value = ''
+  $('#delete-all').disabled = true
+  closeDrawers()
+  $('#data-dialog').showModal()
+}
+
+async function deleteAllData() {
+  const typed = $('#delete-confirm').value
+  if (!DELETE_WORDS.includes(typed.trim().toLocaleUpperCase('vi-VN'))) return
+  try {
+    const res = await api('/api/data/delete', { method: 'POST', json: { user_id: USER, confirm: typed } })
+    $('#data-dialog').close()
+    S.conversations = []
+    S.conversationId = null
+    S.personaId = null
+    S.messages = []
+    S.facts = []
+    S.gallery = []
+    S.drawResult = null
+    S.stats = null
+    lsSet(LS_CONV, null)
+    renderConversations()
+    renderChat()
+    go('characters')
+    toast(`Đã xoá ${res.conversations} cuộc trò chuyện, ${res.memory_facts} ký ức và ${res.images} ảnh.`)
+  } catch (e) {
+    toast('Không xoá được: ' + e.message)
+  }
+}
+
+// ════════════════════════════════════════
+// XEM ẢNH LỚN
+// ════════════════════════════════════════
+function openLightbox(src, caption) {
+  const dialog = $('#lightbox')
+  $('#lb-img').src = src
+  $('#lb-img').alt = caption || ''
+  $('#lb-cap').textContent = caption || ''
+  if (!dialog.open) dialog.showModal()
+}
+
+// ════════════════════════════════════════
+// GẮN SỰ KIỆN + KHỞI ĐỘNG
+// ════════════════════════════════════════
+function bind() {
+  document.addEventListener('click', (e) => {
+    const target = e.target.closest('[data-action]')
+    if (!target) return
+    const action = target.dataset.action
+    if (action === 'new-chat') go('characters')
+    else if (action === 'draw-current') openStudio(S.personaId)
+    else if (action === 'toggle-panel') togglePanel()
+    else if (action === 'close-panel') closeDrawers()
+    else if (action === 'open-sidebar') openDrawer($('#sidebar'))
+    else if (action === 'close-lightbox') $('#lightbox').close()
+    else if (action === 'delete-conversation') deleteCurrentConversation()
+    else if (action === 'open-data') openDataDialog()
+    else if (action === 'close-data') $('#data-dialog').close()
+    else if (action === 'close-welcome') $('#welcome').close()
+  })
+  $('#welcome').addEventListener('close', () => lsSet(LS_WELCOME, '1'))
+  $('#delete-confirm').addEventListener('input', (e) => {
+    $('#delete-all').disabled = !DELETE_WORDS.includes(e.target.value.trim().toLocaleUpperCase('vi-VN'))
+  })
+  $('#delete-all').addEventListener('click', deleteAllData)
+  $('#scrim').addEventListener('click', closeDrawers)
+  $('#lightbox').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close() })
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawers() })
+
+  const input = $('#chat-input')
+  input.addEventListener('input', () => autosize(input))
+  // isComposing: đang gõ dở bằng bộ gõ tiếng Việt (Telex/VNI) thì Enter chưa phải là gửi.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send() }
+  })
+  $('#composer').addEventListener('submit', (e) => { e.preventDefault(); send() })
+  $('#conv-search').addEventListener('input', (e) => { S.search = e.target.value; renderConversations() })
+
+  $('#studio-form').addEventListener('submit', (e) => { e.preventDefault(); draw() })
+  $('#studio-prompt').addEventListener('input', () => { if ($('#studio-prompt').value.trim()) $('#studio-prompt-error').hidden = true })
+  $('#studio-upscale').addEventListener('change', (e) => { S.studio.upscale = e.target.value })
+  $('#studio-enrich').addEventListener('change', (e) => { S.studio.enrich = e.target.checked })
+  $('#studio-attach').addEventListener('change', (e) => { S.studio.attach = e.target.checked })
+  $('#gallery-sort').addEventListener('change', (e) => { S.gallerySort = e.target.value; renderGallery() })
+
+  window.addEventListener('hashchange', route)
+  window.addEventListener('popstate', route)
+  window.addEventListener('focus', () => checkHealth())
+}
+
+async function init() {
+  fillIcons()
+  bind()
+  applyPanelState()
+  $('#me-name').textContent = USER_NAME
+  // Lần đầu mở /app: nói rõ đây là nhân vật AI và dữ liệu nằm ở đâu (lộ trình P3.1).
+  if (lsGet(LS_WELCOME) !== '1') $('#welcome').showModal()
+  await checkHealth()
+  try {
+    S.personas = (await api('/api/personas')).personas || []
+    await fetchConversations()
+  } catch (e) {
+    if (S.health.backend !== false) toast('Không tải được dữ liệu: ' + e.message)
+  }
+  await loadGallery()
+  loadStats()
+
+  let opened = false
+  if (S.conversationId) opened = await openConversation(S.conversationId)
+  if (!opened && S.conversations.length) opened = await openConversation(S.conversations[0].id)
+
+  const wanted = ROUTES[location.hash.slice(1)]
+  if (wanted) showScreen(wanted, { focus: false })
+  else if (!S.conversations.length && S.personas.length) go('characters')
+  else showScreen('chat', { focus: false })
+  setInterval(checkHealth, 30000)
+}
+
+init()
 </script>
 </body>
 </html>

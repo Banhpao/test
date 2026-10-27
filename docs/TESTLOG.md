@@ -12,6 +12,73 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
+## 2026-10-26 — NVIDIA GeForce RTX 3050 Laptop GPU 4096 MiB, RAM 31.7 GiB — so sánh model chat (bench_chat)
+
+**Phần cứng**
+- GPU: NVIDIA GeForce RTX 3050 Laptop GPU
+- RAM: 31.7 GiB
+- HĐH: Windows-10-10.0.26200-SP0; Python 3.11.16
+
+**Cấu hình chạy**
+- Model: qwen2.5:3b, qwen3:4b-instruct
+- num_ctx 4096, num_predict 220, temperature 0.85, num_gpu Ollama tự quyết, few-shot bật, cửa sổ 12 tin
+- Bộ thoại cố định: Pao, Su — 12 câu × 2 vòng, seed 20261022+vòng; trí nhớ giả 3 fact; nhả model trước/sau: có
+- ComfyUI: tắt
+
+**Kết quả**
+| Model | Nạp cold | Bộ nhớ | Token/giây | Chờ chữ đầu | Cả câu | Giữ vai | Ghi chú |
+|---|---|---|---|---|---|---|---|
+| qwen2.5:3b | 3.7s | 2.0 GiB, 100% GPU | 64.4 | 0.1s | 0.8s | 17/24 | trượt: Không chữ Hán, Không liệt kê, Xưng hô, Độ dài, Nhớ đúng |
+| qwen3:4b-instruct | 6.3s | 3.3 GiB, 67% GPU | 14.9 | 0.5s | 4.2s | 23/24 | trượt: Nhớ đúng |
+
+Trung vị trên mọi câu; "Giữ vai" = số câu đạt mọi luật / số câu đã trả lời.
+
+**Giữ vai theo từng luật** (đạt/áp dụng)
+| Model | Tiếng Việt | Không chữ Hán | Không emoji | Không liệt kê | Không nhận AI | Xưng hô | Độ dài | Nhớ đúng |
+|---|---|---|---|---|---|---|---|---|
+| qwen2.5:3b | 24/24 | 23/24 | 24/24 | 23/24 | 24/24 | 23/24 | 23/24 | 0/4 |
+| qwen3:4b-instruct | 24/24 | 24/24 | 24/24 | 24/24 | 24/24 | 24/24 | 24/24 | 3/4 |
+
+**Ghi chú**
+- Số đo tự động: `python bench_chat.py --models qwen2.5:3b qwen3:4b-instruct`; toàn bộ câu trả lời: `data/bench/chat_20261026-163537.json`.
+- Luật chỉ bắt lỗi thô; đọc câu trả lời trong file JSON rồi mới kết luận.
+- Đã sửa tay hai số của qwen3:4b-instruct (22/24 → 23/24, "Không nhận AI" 23/24 → 24/24): luật bắt nhầm "…không hỏi tên tao là ai" — "ai" ở đây là đại từ, không phải "AI". Luật đã sửa (chỉ khớp chữ HOA "AI"), chấm lại file JSON bằng luật mới: các số khác không đổi.
+- Ollama chạy từ ổ rời (`E:\Ollama`, cổng 11435, bản 0.35.0) qua `E:\duan\_vscode\SO-SANH-MODEL-CHAT.cmd`.
+
+**Kết luận**
+- **qwen3:4b-instruct giữ vai tốt hơn rõ:** 23/24 so với 17/24, nhớ đúng 3/4 so với 0/4. Đọc câu trả lời: qwen2.5:3b lẫn cả câu tiếng Trung khi bị hỏi "em là AI", bịa đồ uống ("trà hoa cúc" thay vì trà sữa ít đường), gạch đầu dòng khi bị dụ liệt kê, có câu thô tục; qwen3 trả lời liền mạch, đúng giọng, nhớ tên và đồ uống.
+- **Đổi lại chậm ~4 lần trên GPU 4 GB:** 14.9 so với 64 token/giây, cả câu ~4 giây so với ~1 giây, vì 3.3 GiB không vừa hết VRAM (67% trên GPU, phần còn lại chạy CPU), và chiếm VRAM nhiều hơn khi phải nhường cho ComfyUI. Dự kiến trên GPU từ 6 GB trở lên thì nằm trọn GPU (chưa đo).
+- Chủ dự án đồng ý: `OLLAMA_MODEL` mặc định đổi sang `qwen3:4b-instruct` cùng ngày (DECISIONS D24). Cần nhanh thì `MO-PAOCAKE.cmd --model qwen2.5:3b`.
+
+---
+
+## 2026-09-11 — Chuẩn bị và kiểm tra file Wan 2.2 5B
+
+**Phần cứng**
+- GPU: NVIDIA GeForce RTX 3050 Laptop GPU, 4GB VRAM.
+- RAM: khoảng 32GB (31,7 GiB hệ thống báo).
+- HĐH: Windows x64; Python 3.12.14 trên ổ rời E:.
+
+**Cấu hình kiểm tra**
+- Bộ Comfy-Org: wan2.2_ti2v_5B_fp16, wan2.2_vae, umt5_xxl_fp8_e4m3fn_scaled.
+- Không khởi động Ollama, server ComfyUI hoặc chạy sinh video; không thay biến cấu hình ứng dụng YumeAI.
+
+**Kết quả**
+| Hạng mục | Kết quả | Thời gian | Ghi chú |
+|---|---|---|---|
+| SHA-256 và kích thước 3 model | Đạt | Không đo benchmark | Khớp metadata từ kho chính thức |
+| Cấu trúc safetensors | Đạt | — | Đọc header và danh sách tensor, không nạp toàn bộ weights lên GPU |
+| ComfyUI model discovery | Đạt | — | Tìm được đúng 3 tên file trong các nhóm model |
+| Node của workflow Wan 2.2 5B | Đạt | — | Core + nodes_wan, nodes_video, nodes_model_advanced |
+| Sinh video và hiệu năng | Chưa thử | — | Chưa có kết luận khả năng chạy trên 4GB |
+
+**Ghi chú**
+- PyTorch hiện có cảnh báo backend CUDA tối ưu cần cu130 trở lên; kiểm tra đăng ký node vẫn đạt. Không thay bản PyTorch trong đợt tải model.
+- Workflow chính thức và bản thử nhỏ nằm trong ComfyUI/user/default/workflows. Chi tiết nguồn, SHA-256 và revision ở E:/Python/manifests/wan22-5b.json.
+- Người dùng muốn phát triển cấu hình xử lý cho nhiều loại máy ở bước sau; chưa triển khai hệ thống tự chọn cấu hình trong đợt này.
+
+---
+
 ## Mẫu — copy khối này rồi điền
 
 ```markdown
@@ -48,7 +115,7 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
-## Chưa có mục nào
+## Tham chiếu máy phát triển trước đây
 
 Máy phát triển hiện tại: AMD Radeon 680M (iGPU), 4GB VRAM chia từ 16GB RAM,
 hệ điều hành thấy ~12.4GB. Số liệu tham chiếu từ máy này:

@@ -15,5 +15,15 @@ cd "D:\baitap\code py\formyhorny\project"
 python app_gradio.py
 
 lenh xac nhan khi khoi dong main
-python -m py_compile app_gradio.py
-python app_gradio.py
+
+
+lenh chay heatroom
+headroom install apply --preset persistent-service --providers auto
+headroom install status
+
+lenh quan ly vong doi khi cai
+headroom install status    # xem đang chạy chưa
+headroom install stop      # dừng
+headroom install start     # chạy lại
+headroom install restart   # khởi động lại
+headroom install remove    # gỡ hẳn service (reversible)

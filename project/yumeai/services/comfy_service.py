@@ -12,7 +12,7 @@ import uuid
 import httpx
 from PIL import Image
 
-from yumeai.core.config import COMFY_URL
+from yumeai.core.config import COMFY_URL, OLLAMA_NUM_GPU, VRAM_HANDOFF
 
 
 class ComfyUIError(Exception):
@@ -42,6 +42,26 @@ def comfy_is_up(timeout: float = 3.0) -> bool:
         with httpx.Client(timeout=timeout) as c:
             return c.get(f"{COMFY_URL}/system_stats").status_code == 200
     except Exception:
+        return False
+
+
+def free_comfy_vram(timeout: float = 3.0) -> bool:
+    """Nhờ ComfyUI nhả model khỏi VRAM (POST /free) trước khi Ollama nạp model vision.
+
+    Bước verify/caption bằng vision chạy ngay sau job Flux, lúc ComfyUI vẫn giữ model
+    trong VRAM — trên GPU 4GB model vision phải chen vào chỗ còn lại hoặc tràn sang
+    RAM. Best-effort: ComfyUI tắt/lỗi thì bỏ qua, không bao giờ ném lỗi.
+    Không làm gì khi YUMEAI_VRAM_HANDOFF=0 hoặc Ollama đã bị ép chạy CPU (num_gpu=0).
+    """
+    if not VRAM_HANDOFF or OLLAMA_NUM_GPU == 0:
+        return False
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            r = c.post(f"{COMFY_URL}/free",
+                       json={"unload_models": True, "free_memory": True})
+        return r.status_code < 400
+    except Exception as e:
+        print(f"⚠️ Không nhờ được ComfyUI nhả VRAM trước bước vision (bỏ qua): {e}")
         return False
 
 

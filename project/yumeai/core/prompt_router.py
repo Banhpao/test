@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 
-from yumeai.core.config import OLLAMA_URL, OLLAMA_MODEL
+from yumeai.core.config import OLLAMA_URL, OLLAMA_MODEL, ollama_options
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -51,6 +51,14 @@ IMAGE_NOUNS = [
 SHOW_IMAGE_HINTS = [
     "xem ảnh", "xem hình", "gửi ảnh", "gửi hình", "khoe ảnh", "khoe hình",
     "selfie", "tự sướng", "cho xem ảnh", "cho xem hình",
+]
+
+# ── Cụm có chữ "ảnh"/"hình" nhưng KHÔNG nói về ảnh — rất hay gặp trong chat thường.
+# Bỏ chúng đi trước khi dò tín hiệu ảnh, nếu không "hình như em buồn" cũng bị đem
+# hỏi planner LLM.
+NON_IMAGE_PHRASES = [
+    "ảnh hưởng", "phản ảnh", "hình như", "tình hình", "màn hình", "hình thức",
+    "mô hình", "điển hình", "hình dung",
 ]
 
 # ── Tín hiệu chat rõ ràng (chỉ dùng để tăng độ tin cậy, KHÔNG còn quyết định) ──
@@ -221,6 +229,14 @@ def _looks_like_chat(text: str) -> bool:
     return contains_any_word(normalize_text(text), CHAT_HINTS)
 
 
+def _has_image_cue(text: str) -> bool:
+    """Câu không có ảnh đính kèm nhưng có nhắc tới ảnh/hình/chụp → đáng hỏi planner LLM."""
+    t = normalize_text(text)
+    for phrase in NON_IMAGE_PHRASES:
+        t = re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", t)
+    return contains_any_word(t, IMAGE_NOUNS + ["chụp"])
+
+
 def rule_plan_request(
     text: str,
     has_image: bool = False,
@@ -255,9 +271,11 @@ def rule_plan_request(
         return PromptPlan(
             task="chat",
             style=style,
-            # Có tín hiệu chat rõ ràng thì khỏi phiền LLM; còn lại để LLM soi lại
-            # phòng khi người dùng xin ảnh bằng cách diễn đạt lạ.
-            confidence="high" if _looks_like_chat(t) else "low",
+            # Chỉ nhờ LLM soi lại khi câu CÓ nhắc tới ảnh/hình/chụp (có thể là cách xin
+            # ảnh diễn đạt lạ). Bản cũ để "low" cho mọi câu thiếu CHAT_HINTS — 9/10 câu
+            # chat thường ("anh nhớ em", "ừ", "haha") — nên gần như lượt nào cũng chờ
+            # một lời gọi planner chặn (timeout 25s) trước khi nhân vật bắt đầu trả lời.
+            confidence="low" if (_has_image_cue(t) and not _looks_like_chat(t)) else "high",
             reason="Không có ảnh và không có yêu cầu tạo ảnh rõ ràng → trả lời như chat.",
         )
 
@@ -439,10 +457,12 @@ Rules:
                     # Ép Ollama trả JSON hợp lệ — model nhỏ (1b/3b) rất hay kèm
                     # lời dẫn hoặc markdown làm json.loads gãy.
                     "format": "json",
-                    "options": {
+                    # Model biết "suy nghĩ" sẽ tiêu hết 220 token vào phần suy luận.
+                    "think": False,
+                    "options": ollama_options({
                         "temperature": 0.1,
                         "num_predict": 220,
-                    },
+                    }),
                 },
             )
             raw = r.json().get("message", {}).get("content", "").strip()

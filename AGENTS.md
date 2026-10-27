@@ -26,7 +26,7 @@ nhân vật đó gửi ảnh của chính mình.
 
 Ba trụ của sản phẩm, theo đúng thứ tự quan trọng:
 
-1. **Nhân vật cố định** — cùng một Yuki, ngày nào cũng vậy
+1. **Nhân vật cố định** — cùng một Pao, ngày nào cũng vậy
 2. **Trò chuyện có trí nhớ** — nhớ được người dùng là ai, đã nói gì
 3. **Ảnh của chính nhân vật đó** — không phải một cô gái ngẫu nhiên
 
@@ -35,7 +35,8 @@ Ba trụ của sản phẩm, theo đúng thứ tự quan trọng:
 > Đó là di sản của giai đoạn đầu, và nó là *tính năng phụ*. Đừng đề xuất thêm tính
 > năng sửa ảnh khi ba trụ trên còn chưa xong. Xem `docs/DECISIONS.md` mục D1.
 
-Không phải: công cụ tạo ảnh dùng một lần, không phải image-to-video (xem D9).
+Không phải: công cụ tạo ảnh dùng một lần, không phải dịch vụ image-to-video (xem D9).
+Video ngắn từ ảnh của chính persona là tính năng phụ, chỉ bật khi máy đủ sức (xem D17).
 
 ---
 
@@ -44,25 +45,40 @@ Không phải: công cụ tạo ảnh dùng một lần, không phải image-to-
 ```
 formyhorny/
 ├── AGENTS.md, CLAUDE.md, docs/     ← bộ nhớ dự án (file này)
+├── MO-PAOCAKE.cmd           bấm đúp để mở app: gọi project/khoi_dong.py (D23)
 └── project/
     ├── app_gradio.py        ~3800 dòng — UI Gradio + TOÀN BỘ pipeline ảnh
-    ├── main.py              ~580 dòng  — REST API + persistence cho web UI thật
-    ├── chat-ui-mockup.html  UI web tại /app, dùng conversation/gallery API
+    ├── main.py              ~850 dòng  — REST API + persistence cho web UI thật
+    ├── chat-ui-mockup.html  UI web tại /app (D19): trò chuyện, tạo ảnh, bộ sưu tập, chọn nhân vật
     ├── test_router.py       ★ test chạy OFFLINE, không cần Ollama/ComfyUI
     ├── test_storage.py      test SQLite thuần, không cần dịch vụ
     ├── test_chat_context.py test trí nhớ dài: ĐẾM số lời gọi LLM tóm tắt
     ├── test_memory.py       test fact extraction theo lô, không gọi Ollama thật
     ├── test_api_storage.py  smoke test REST + SQLite với Ollama giả
+    ├── test_rename_persona.py  test đổi tên Yuki → Pao, Hana → Su (D18): chuyển DB, sao lưu, id cũ
+    ├── test_web_ui.py       test OFFLINE cho /app: chỉ gọi API có thật, giá trị khớp comfy_service
+    ├── test_chat_image_route.py  test xin ảnh trong chat: /api/chat/intent + lưu câu xin ảnh
+    ├── test_data_controls.py  test xoá ảnh/hội thoại, xuất zip, xoá toàn bộ dữ liệu (D20)
+    ├── test_sao_luu.py      test OFFLINE cho sao lưu / khôi phục
+    ├── test_perf.py         test OFFLINE cho số đo hiệu năng + /api/stats (D22)
     ├── devlog.py            ghi nhanh một dòng vào CHANGELOG
+    ├── sao_luu.py           sao lưu / khôi phục DB + ảnh thành một file zip (D21)
+    ├── bench_baseline.py    đo nền giai đoạn 0 (D17): GPU/RAM/đĩa + text2img cold/warm + D16
+    ├── test_bench_baseline.py  test OFFLINE cho bench (ComfyUI/Ollama/nvidia-smi giả)
+    ├── bench_chat.py        so sánh model chat: cùng bộ thoại Pao/Su, tốc độ + bộ nhớ + giữ vai
+    ├── test_bench_chat.py   test OFFLINE cho bench_chat (Ollama giả bằng httpx.MockTransport)
+    ├── khoi_dong.py         mở app một cú bấm: Ollama (ổ rời, cổng 11435) + ComfyUI + main.py (D23)
+    ├── test_khoi_dong.py    test OFFLINE cho khoi_dong (chọn Ollama, cờ ComfyUI theo VRAM, tắt đúng cái mình bật)
     ├── ComfyUI/             KHÔNG trong git — 93GB model, ~1.4GB custom_nodes
     └── yumeai/              ★ logic dùng chung — SỬA Ở ĐÂY, không copy sang nơi khác
         ├── core/
         │   ├── config.py          mọi biến môi trường, timeout, tham số chat
-        │   ├── personas.py        hồ sơ nhân vật (tính cách, giọng nói, few-shot)
+        │   ├── personas.py        hồ sơ nhân vật (tính cách, giọng nói, few-shot) + id cũ → mới
         │   ├── persona_prompt.py  dựng system prompt + few-shot từ hồ sơ
         │   ├── chat_context.py    lịch sử chat + trí nhớ dài + options Ollama
         │   ├── prompt_router.py   quyết định: chat / tạo ảnh / sửa ảnh
         │   ├── image_prompt.py    prompt text2img (positive + negative)
+        │   ├── perf.py            số đo thật mỗi lượt chat/ảnh → data/perf.jsonl (chỉ số, D22)
         │   └── runtime.py         Resource Guard (chỉ 1 job ComfyUI cùng lúc)
         ├── services/
         │   ├── ollama_service.py  dịch, enrich, tóm tắt trí nhớ, chọn model
@@ -81,7 +97,9 @@ lệnh cho ra hai kết quả khác nhau. Đừng lặp lại.
 
 ## 3. Chạy dự án
 
-Cần **ba tiến trình riêng biệt**. Chi tiết trong [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+Nhanh nhất: bấm đúp **`MO-PAOCAKE.cmd`** — tự bật Ollama trên ổ rời, ComfyUI và `main.py`, rồi
+mở `/app` (D23). Bên dưới là ba tiến trình nó bật, chạy tay được.
+Chi tiết trong [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ```bash
 # 1) Ollama (chat, dịch, vision)        — BẮT BUỘC
@@ -110,6 +128,7 @@ cd project && python test_storage.py
 cd project && python test_chat_context.py
 cd project && python test_memory.py
 cd project && python test_api_storage.py
+cd project && python test_bench_baseline.py
 ```
 
 Chạy **offline**, không cần Ollama hay ComfyUI (các test cần dịch vụ sẽ tự bỏ qua

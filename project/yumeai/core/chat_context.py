@@ -21,7 +21,7 @@ import hashlib
 from yumeai.core.config import (
     CHAT_HISTORY_MAX_MESSAGES, CHAT_NUM_CTX, CHAT_TEMPERATURE, CHAT_TOP_P,
     CHAT_REPEAT_PENALTY, CHAT_NUM_PREDICT, CHAT_FEWSHOT, CHAT_SUMMARY,
-    CHAT_SUMMARY_EVERY, CHAT_SUMMARY_MAX_MESSAGES,
+    CHAT_SUMMARY_EVERY, CHAT_SUMMARY_MAX_MESSAGES, ollama_options,
 )
 from yumeai.core.persona_prompt import build_system_prompt, build_fewshot_messages
 
@@ -58,10 +58,28 @@ def strip_ui_markers(content: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _content_text(content):
+    """Lấy phần chữ của content một message.
+
+    Gradio 6 trả lịch sử Chatbot với content là DANH SÁCH khối
+    [{"type": "text", "text": "..."}] chứ không còn là str. Bản cũ chỉ nhận str nên
+    bỏ sạch mọi lượt cũ — nhân vật không thấy lịch sử hội thoại nào. Khối không
+    phải chữ (file/ảnh) bị bỏ qua.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict) and content.get("type") == "text":
+        return str(content.get("text") or "")
+    if isinstance(content, (list, tuple)):
+        return "\n".join(_content_text(part) for part in content if part is not None).strip()
+    return ""
+
+
 def clean_history(history) -> list[dict]:
     """
     Lọc lịch sử chat của UI thành list message sạch cho Ollama.
-    Nhận cả 2 dạng: [{"role":..,"content":..}] và [(user, assistant), ...].
+    Nhận cả 2 dạng: [{"role":..,"content":..}] và [(user, assistant), ...];
+    content có thể là str hoặc list khối {"type": "text"} của Gradio 6.
     """
     out: list[dict] = []
     for m in history or []:
@@ -69,7 +87,7 @@ def clean_history(history) -> list[dict]:
         if isinstance(m, (list, tuple)) and len(m) == 2:
             pairs = (("user", m[0]), ("assistant", m[1]))
         elif isinstance(m, dict):
-            pairs = ((m.get("role", ""), m.get("content", "")),)
+            pairs = ((m.get("role", ""), _content_text(m.get("content", ""))),)
         else:
             continue
 
@@ -109,13 +127,37 @@ def chat_options(temperature: float = None, num_predict: int = None) -> dict:
     repeat_penalty quan trọng với model nhỏ: 1b–3b rất hay lặp lại nguyên câu
     vừa nói, làm nhân vật nghe như máy hỏng.
     """
-    return {
+    return ollama_options({
         "temperature": CHAT_TEMPERATURE if temperature is None else temperature,
         "num_predict": CHAT_NUM_PREDICT if num_predict is None else num_predict,
         "top_p": CHAT_TOP_P,
         "repeat_penalty": CHAT_REPEAT_PENALTY,
         "num_ctx": CHAT_NUM_CTX,
-    }
+    })
+
+
+def history_load_limit(total_messages: int):
+    """Số text message CUỐI cần đọc từ DB để dựng ngữ cảnh y hệt như khi đọc cả hội thoại.
+
+    Trước đây mỗi lượt chat đọc TOÀN BỘ hội thoại (Gradio dùng một hội thoại không bao
+    giờ kết thúc cho mỗi nhân vật), nên chi phí mỗi lượt tăng mãi theo độ dài.
+    Cần: cửa sổ gần nhất (CHAT_HISTORY_MAX_MESSAGES) + cửa sổ tóm tắt
+    (CHAT_SUMMARY_MAX_MESSAGES). Điểm bắt đầu được làm tròn xuống bội số của
+    CHAT_SUMMARY_EVERY để ranh giới lô trong summarize_old_history() trùng với khi đọc
+    cả hội thoại — lệch ranh giới là khoá cache tóm tắt đổi mỗi lượt, đúng lỗi D13.
+    Trả None = phải đọc hết (cửa sổ không giới hạn).
+    """
+    total = max(0, int(total_messages))
+    if CHAT_HISTORY_MAX_MESSAGES <= 0:
+        return None
+    if not CHAT_SUMMARY:
+        return min(total, CHAT_HISTORY_MAX_MESSAGES)
+    every = max(1, CHAT_SUMMARY_EVERY)
+    bucket_end = ((total - CHAT_HISTORY_MAX_MESSAGES) // every) * every
+    if bucket_end <= 0:
+        return total
+    start = max(0, ((bucket_end - CHAT_SUMMARY_MAX_MESSAGES) // every) * every)
+    return total - start
 
 
 # ══════════════════════════════════════════════════════════════════════════

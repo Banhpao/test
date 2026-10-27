@@ -1,14 +1,20 @@
 # YumeAI — dependencies cho app_gradio.py + main.py + yumeai/ package
 # (ComfyUI cài riêng theo hướng dẫn của ComfyUI, không nằm trong file này)
+#
+# Ghim đúng bộ version ĐANG CHẠY ĐƯỢC trong project/.venv. Không ghim thì pip kéo bản
+# mới nhất: app_gradio.py dựa vào Gradio 6 (launch(theme=...)) và còn vá trực tiếp nội
+# bộ Gradio/h11 (BrotliMiddleware.__call__, h11 ContentLengthWriter.send_eom) — bản
+# Gradio khác có thể làm hai bản vá đó gãy mà không báo lỗi gì.
+# Nâng version thì nâng có chủ đích, chạy lại test + mở UI kiểm tra, rồi sửa số ở đây.
 
-gradio
-fastapi
-uvicorn
-httpx
-pydantic
-pillow
-numpy
+gradio==6.19.0
+fastapi==0.139.0
+uvicorn==0.50.2
+httpx==0.28.1
+pydantic==2.13.4
+pillow==12.3.0
+numpy==2.4.6
 
 # Cross-process Resource Guard (chặn tràn VRAM khi app_gradio.py và main.py
 # chạy song song 2 tiến trình riêng biệt) — xem yumeai/core/runtime.py
-filelock
+filelock==3.29.6

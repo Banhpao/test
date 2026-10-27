@@ -175,7 +175,7 @@ có DB chỉ cần đọc từ bảng thay vì tính lại.
 ---
 
 ## D9 — Không làm image-to-video (mô hình MotionMuse)
-**Ngày:** 2026-08-18 · **Trạng thái:** đã chốt — loại bỏ
+**Ngày:** 2026-08-18 · **Trạng thái:** đã chốt — loại bỏ · **Thay một phần bởi D17** (2026-10-21)
 
 **Bối cảnh.** Có cân nhắc hướng giống motionmuse.ai (NSFW image-to-video, mô hình
 credit, ~16.6 triệu lượt truy cập/tháng).
@@ -382,3 +382,358 @@ giờ biết tên người dùng còn qua REST thì biết.
 
 **Còn nợ.** Ảnh sinh từ Gradio chưa được ghi vào bảng `images` — gallery bền vững
 hiện chỉ có ở đường REST. Cần hook ở `runtime.run_comfy_job` (xem lộ trình giai đoạn D).
+
+---
+
+## D16 — Ollama và ComfyUI nhường VRAM cho nhau trên GPU 4GB
+**Ngày:** 2026-10-15 · **Trạng thái:** đã chốt, **chưa chạy thử trên RTX 3050**
+
+**Bối cảnh.** Mọi quyết định phần cứng trước đây dựa trên iGPU Radeon 680M, nơi Ollama
+chạy RAM/CPU và "không đụng VRAM" (AGENTS.md mục 5). Máy hiện tại là RTX 3050 Laptop
+4GB: Ollama đẩy model lên GPU và giữ 5 phút sau mỗi lời gọi. Một yêu cầu ảnh bình
+thường là dịch/enrich (Ollama) rồi ngay lập tức job ComfyUI; bước verify bằng vision
+lại chạy ngay sau job Flux. Không chỗ nào điều phối hai bên.
+
+**Quyết định.** Một chính sách, hai điểm móc, một công tắc `YUMEAI_VRAM_HANDOFF`
+(mặc định bật):
+
+1. `runtime.run_comfy_job()` — sau khi đã giữ slot Resource Guard, trước khi gửi job —
+   gọi `ollama_service.unload_ollama_models()`: đọc `/api/ps`, gửi `keep_alive: 0` cho
+   model nào đang có `size_vram > 0`. Mọi job ComfyUI của cả hai cửa vào đều đi qua hàm
+   này nên chỉ cần móc một chỗ.
+2. Trước mỗi lời gọi vision trong `app_gradio.py`: `comfy_service.free_comfy_vram()` →
+   `POST /free {"unload_models": true, "free_memory": true}`, timeout 3s, lỗi thì bỏ qua.
+
+Cả hai đều best-effort: dịch vụ tắt/lỗi chỉ in cảnh báo, không chặn chat hay job vẽ.
+Thêm `YUMEAI_OLLAMA_NUM_GPU` (gửi `options.num_gpu` ở **mọi** lời gọi Ollama — khác
+nhau giữa hai lời gọi cùng model là Ollama nạp lại). Đặt `0` thì Ollama chạy hẳn CPU;
+khi đó bước 2 tự bỏ qua và bước 1 bỏ qua model `size_vram = 0`.
+
+**Đánh đổi.** `free_memory: true` xoá cache của ComfyUI nên job kế tiếp nạp lại
+checkpoint (đọc đĩa/RAM). Chấp nhận: trên 4GB hai bên không cùng nằm trong VRAM được,
+còn tràn VRAM thì chậm hơn nhiều hoặc OOM.
+
+**Đã loại.**
+
+- **Chỉ `num_gpu: 0` mặc định.** Đơn giản nhất nhưng đổi hẳn tốc độ chat/vision trên
+  mọi máy; để thành tuỳ chọn cho tới khi đo thật trên RTX 3050.
+- **Unload trong từng chỗ gọi ComfyUI.** Có 8 chỗ gọi; móc ở `run_comfy_job()` là đủ.
+
+**Còn nợ.** Chưa đo thời gian nạp lại model và VRAM thực tế trên RTX 3050 — cần một lượt
+chạy thật rồi ghi vào TESTLOG.
+
+---
+
+## D17 — Cho phép video ngắn từ ảnh persona (thay một phần D9)
+**Ngày:** 2026-10-21 · **Trạng thái:** đã chốt · **Thay thế một phần D9**
+
+**Bối cảnh.** D9 loại image-to-video với bốn lý do. Hai lý do đầu là về năng lực máy và
+đã cũ:
+
+1. "Không có chút năng lực video nào" — từ 2026-09-11 `ComfyUI/models` đã có bộ Wan 2.2
+   TI2V 5B, đã kiểm SHA-256, node và model discovery (TESTLOG), dù **chưa chạy sinh video
+   lần nào**.
+2. "iGPU 4GB không chạy nổi" — máy hiện tại là RTX 3050 Laptop 4GB VRAM rời + ~32GB RAM
+   (D16), không còn là Radeon 680M. 4GB vẫn ít; chưa có số đo nào cho biết chạy được tới đâu.
+
+Hai lý do sau **vẫn đúng nguyên**: (3) một *tool* video sống bằng tốc độ, (4) tool phục vụ
+nhiều người ⇒ cloud GPU + queue + billing, ngược D2. Cả hai chống mô hình *dịch vụ*, không
+chống việc nhân vật thỉnh thoảng gửi một clip của chính mình — cùng loại với gửi ảnh ở trụ 3
+(D1). Người dùng muốn có tính năng đó, và muốn cấu hình chạy được trên nhiều loại máy từ yếu
+đến mạnh (STATE, mục Wan 2.2).
+
+**Quyết định.**
+
+1. **Cho phép image-to-video ngắn, đầu vào chỉ là ảnh của chính persona** (ảnh YumeAI đã tạo
+   cho nhân vật đó). Đây là **tính năng phụ** của trụ 3 — "nhân vật gửi clip của mình" —
+   không phải trụ mới, không phải sản phẩm.
+2. **Chỉ bật khi hồ sơ máy cho phép.** Mặc định tắt; máy không đủ VRAM/RAM/đĩa thì tính năng
+   không hiện ra, thay vì cho chạy rồi tràn VRAM hoặc treo máy. Ngưỡng của hồ sơ máy chỉ đặt
+   từ số đo thật.
+3. **Chỉ REST + web UI `/app` dùng lớp mới.** `app_gradio.py` giữ nguyên.
+4. **Model mới đặt trong `project/ComfyUI/models`** (`COMFY_MODELS_DIR`), cùng chỗ model hiện
+   có — không thêm thư mục model thứ hai.
+5. **Làm theo giai đoạn**, giai đoạn sau chỉ bắt đầu khi giai đoạn trước có số đo. Giai đoạn 0
+   chỉ đo nền trên máy thật bằng `project/bench_baseline.py`: text2img SD1.5 cold/warm, VRAM
+   đỉnh, giá nhả VRAM Ollama (D16), chỗ trống đĩa (≥ 30 GiB cho model giai đoạn sau). Chưa
+   thêm model hay tính năng nào.
+
+**Giữ nguyên từ D9.** Không làm dịch vụ kiểu MotionMuse: không credit, không billing, không
+cloud GPU, không hàng đợi nhiều người dùng, không phục vụ người ngoài. Giới hạn đầu vào ở ảnh
+persona cũng là để dự án không trôi về tool stateless "vào ảnh bất kỳ → ra video" mà D1/D9
+đã cảnh báo.
+
+**Hệ quả.**
+
+- D1 vẫn đứng trên: video là phụ, không chen trước ba trụ.
+- Mọi job video đi qua `runtime.run_comfy_job()` (Resource Guard + D16) như mọi job ComfyUI.
+- Logic pipeline mới nằm trong `yumeai/` (D6); `main.py` chỉ nhận input và đổi kiểu lỗi.
+- Đầu vào chỉ là ảnh persona nên nguyên tắc consent ở `PRODUCT_ROADMAP.md` P3 (không nhận ảnh
+  người thật) áp cho video y như ảnh.
+- Kết quả từng giai đoạn ghi vào `docs/TESTLOG.md`; ngưỡng hồ sơ máy lấy từ đó.
+
+**Đã loại.**
+
+- **Giữ D9 nguyên văn.** Hai trong bốn lý do dựa trên phần cứng đã không còn; giữ thì lần nào
+  nhắc tới video cũng phải cãi lại từ đầu.
+- **Bật video cho mọi máy.** GPU 4GB có thể không chạy nổi model video nào ở chất lượng dùng
+  được; không chặn theo hồ sơ máy thì người dùng gặp OOM/treo thay vì một tính năng tắt có lý do.
+- **Video từ ảnh bất kỳ người dùng tải lên.** Đó chính là tool image-to-video D9 loại, và mở
+  đường cho ảnh người thật.
+- **Thêm video vào Gradio.** Gradio là cửa debug của khối ~3800 dòng đang cần tách (STATE, việc
+  "Tách pipeline ảnh khỏi Gradio"); thêm vào là tăng nợ đúng chỗ đó.
+
+**Còn nợ.**
+
+- Chưa định nghĩa hồ sơ máy (trường nào, ngưỡng bao nhiêu) — chờ số đo giai đoạn 0. Hàm dò
+  GPU/RAM/đĩa hiện nằm trong `bench_baseline.py`; khi làm hồ sơ máy thì chuyển vào `yumeai/`,
+  không copy sang chỗ thứ hai.
+- Chưa chạy sinh video lần nào trên RTX 3050 (TESTLOG 2026-09-11: "Chưa thử").
+
+## D18 — Đổi tên nhân vật: Yuki thành Pao, Hana thành Su
+**Ngày:** 2026-10-22 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Người dùng đổi tên hai nhân vật — Yuki thành Pao, Hana thành Su — và muốn đổi
+ở mọi chỗ: cả tên hiển thị lẫn id nội bộ, kể cả dữ liệu đã lưu. Bản thiết kế giao diện `/app`
+mới đã dùng tên mới.
+
+**Quyết định.**
+
+1. **Đổi cả tên lẫn id:** `"yuki"` → `"pao"`, `"hana"` → `"su"` trong `personas.py`, `main.py`,
+   `app_gradio.py`, `chat-ui-mockup.html`, test và tài liệu đang dùng. **Chỉ đổi tên**: tuổi, vai, tính cách,
+   cách xưng hô (Pao tao/mày ↔ tớ/cậu, Su em/anh), few-shot và tag ngoại hình giữ nguyên.
+2. **Chuyển dữ liệu cũ, không bỏ.** `YumeDatabase.initialize(personas, PERSONA_ID_ALIASES)`
+   gọi `rename_characters()`: với mỗi nhân vật, tạo dòng mới → chuyển `conversations`,
+   `memory_facts`, `images` → xoá dòng cũ. Mọi nhân vật đi chung **một** transaction và
+   **một** bản sao lưu (backup API của sqlite, vào
+   `data/backups/truoc-doi-ten-yuki-thanh-pao-hana-thanh-su-*.db`) — lỗi giữa chừng thì không
+   ai bị đổi dở. Không còn id cũ thì không làm gì, nên mở app nhiều lần vô hại.
+3. **Chỉ tiêu đề tự sinh được đổi** ("Trò chuyện với Yuki" → "Trò chuyện với Pao", tương tự
+   Hana → Su). Tiêu đề người dùng tự đặt, nội dung tin nhắn và tóm tắt trí nhớ đã lưu giữ
+   nguyên chữ.
+4. **API vẫn nhận id cũ.** `resolve_persona_id()` đổi `"yuki"` → `"pao"`, `"hana"` → `"su"` ở
+   mọi request (body lẫn query string), để tab `/app` mở từ trước hay script/curl cũ không bị 404.
+5. `PERSONA_ID_ALIASES` **chỉ thêm, không xoá**: DB copy từ máy khác sang vẫn có thể còn id cũ.
+
+**Hệ quả.**
+
+- Trùng khoá trí nhớ (cùng user, cùng `fact_key` ở cả hai id) thì giữ bản của id mới.
+- Tin nhắn cũ và `memory_summary` có thể vẫn còn chữ "Yuki"/"Hana" — đó là lời đã nói, không sửa.
+- Các mục CHANGELOG/DECISIONS trước ngày này vẫn ghi Yuki/Hana vì đó là lịch sử.
+
+**Đã loại.**
+
+- **Chỉ đổi tên hiển thị, giữ id cũ.** Không đụng dữ liệu, nhưng code/DB gọi một tên còn
+  giao diện gọi tên khác — người sau đọc code dễ nhầm. Người dùng chọn đổi hết.
+- **`UPDATE characters SET id` tại chỗ.** Khoá ngoại không có `ON UPDATE CASCADE` và
+  `foreign_keys` đang bật nên bị chặn; tắt `foreign_keys` để làm thì dễ để lại dòng mồ côi.
+- **Thay tên cũ trong tin nhắn và tóm tắt.** Viết lại lời đã nói, và thay chuỗi mù trong
+  văn bản tự do dễ sai nghĩa.
+
+## D19 — Giao diện `/app` làm lại: "Ngân hà hồng"
+**Ngày:** 2026-10-22 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Giao diện `/app` cũ thô và rời rạc (một màn chat, thanh ảnh và trí nhớ dồn
+một chỗ, hộp `prompt()`/`confirm()` của trình duyệt). Người dùng muốn một giao diện lãng mạn,
+nền hồng tối dịu mắt để dùng trong phòng không bật đèn, và đã duyệt bản thiết kế trên canvas
+trước khi viết code.
+
+**Quyết định.**
+
+1. **Một file HTML viết tay, không framework, không bước build** — `main.py` vẫn phục vụ
+   `chat-ui-mockup.html` như file tĩnh, chạy offline trên máy người dùng.
+2. **Bốn màn trong một trang**, đổi bằng `#hash` (nút Back vẫn dùng được): Trò chuyện, Tạo
+   ảnh, Bộ sưu tập, Chọn nhân vật. Màn hẹp (≤ 900px) thì thanh bên và bảng hồ sơ thành ngăn kéo.
+3. **Chỉ vẽ nút cho việc backend làm được.** Bản thiết kế có chọn kiểu video, khung hình, bộ
+   vẽ và hàng chờ — REST chưa có nên `/app` chưa hiện; thêm khi lớp sinh ảnh mới (D17) có API.
+   Nút bấm không chạy tệ hơn không có nút.
+4. **Mặc định chất lượng là mức kỹ nhất** ("Tốt nhất", 50 bước): người dùng ưu tiên đẹp và
+   chuẩn hơn nhanh. Giá trị gửi lên phải khớp hằng trong `comfy_service` — `test_web_ui.py` giữ.
+5. **Chữ từ máy chủ/LLM/người dùng vào DOM bằng `textContent`**; `innerHTML` chỉ cho bộ icon
+   SVG hằng số. Ký ức sửa/xoá ngay trong bảng (hỏi lại trước khi xoá) thay cho hộp thoại trình duyệt.
+6. **Màu chữ kiểm tương phản ≥ 4.5:1** trên mọi nền đang dùng; đổi màu thì kiểm lại.
+7. **Xin ảnh ngay trong khung chat.** `/app` hỏi `POST /api/chat/intent` trước mỗi tin nhắn;
+   endpoint gọi đúng `prompt_router.plan_request()` của Gradio, không viết bộ định tuyến thứ
+   hai. Ra `text2img` thì gọi `/api/images/generate` kèm `chat_message` — câu xin ảnh và ảnh
+   chỉ được lưu vào hội thoại khi vẽ xong, như `/api/chat` chỉ lưu khi đã có câu trả lời.
+   REST chưa nhận ảnh đính kèm nên các task sửa ảnh quy về trò chuyện.
+
+**Hệ quả.**
+
+- `app_gradio.py` không đổi (D17).
+- Ảnh chân dung trong hồ sơ và thẻ nhân vật lấy ảnh gần nhất của nhân vật đó trong bộ sưu
+  tập; chưa có ảnh thì hiện chữ cái đầu.
+- Tạo ảnh qua REST là một request chờ tới khi xong, nên màn Tạo ảnh chỉ hiện thời gian đã
+  chạy, chưa có số bước thật.
+- Mỗi tin nhắn thêm một request định tuyến. Rule-based trả gần như tức thì; chỉ câu có nhắc
+  tới ảnh/hình mà không rõ ý mới gọi thêm planner LLM (tối đa 25 giây).
+- Ảnh xin trong chat dùng mức chất lượng và phóng to đang chọn ở màn Tạo ảnh (mặc định Tốt nhất).
+
+**Đã loại.**
+
+- **React/Vite.** Thêm bước build và `node_modules` cho một màn hình chạy local — thứ dễ hỏng
+  nhất khi chép dự án sang máy khác.
+- **Giữ nút cho tính năng chưa có, để mờ.** Người dùng bấm thử rồi không hiểu vì sao không
+  chạy; ghi lại ở đây là đủ để nhớ sẽ thêm.
+
+## D20 — Người dùng tự xoá và xuất được dữ liệu của mình
+**Ngày:** 2026-10-22 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Lộ trình P3 đòi trước khi gọi là beta: nói rõ đây là nhân vật AI, và người dùng
+xoá/xuất được toàn bộ dữ liệu. Trước nay chỉ ký ức là xoá được; hội thoại, ảnh, cả DB thì
+phải mở SQLite bằng tay.
+
+**Quyết định.**
+
+1. **Màn chào lần đầu** ở `/app` nói rõ Pao/Su là nhân vật AI do mô hình chạy trên máy viết
+   ra, có thể nhớ sai/nói sai, và dữ liệu nằm ở `project/data`. Nhân vật vẫn không phá vai
+   trong lúc chat (`personas.py`) — minh bạch nằm ở tầng sản phẩm, không ở lời nhân vật.
+   Không làm age gate vì không có nội dung 18+.
+2. **Xoá một ảnh** (`DELETE /api/gallery/{id}`) xoá dòng DB, file PNG và tin nhắn ảnh trỏ tới
+   nó — để lại tin nhắn thì hội thoại hiện một khung ảnh hỏng.
+3. **Xoá một hội thoại** (`DELETE /api/conversations/{id}`) xoá tin nhắn nhưng giữ ảnh trong
+   bộ sưu tập (D14: ảnh thuộc về người dùng) và giữ ký ức (ký ức theo cặp người dùng–nhân vật,
+   không theo hội thoại). Hộp xác nhận nói rõ cả hai điều đó.
+4. **Xuất toàn bộ** (`GET /api/data/export`) là một zip: `data.json` + ảnh, đọc được không cần
+   YumeAI.
+5. **Xoá toàn bộ** (`POST /api/data/delete`) phải gõ `XOÁ`, xoá thật: không tự sao lưu, chạy
+   `VACUUM` để chữ đã xoá không nằm lại trong trang trống của file DB. Nhân vật giữ nguyên.
+   Bản sao lưu cũ trong `data/backups/` không bị đụng tới — giao diện nói rõ để người dùng tự xoá.
+6. Ảnh cũ không rõ chủ (`user_id = ''`, trước migration v3) chỉ tính là của người dùng khi DB
+   chỉ có một người dùng — cùng quy tắc migration đã dùng để gán chủ.
+
+**Đã loại.**
+
+- **Tự sao lưu trước khi "xoá toàn bộ".** Người dùng chủ động xoá thì một bản sao giấu đi
+  là trái ý họ. Muốn giữ thì đã có nút xuất ngay phía trên.
+- **Xoá hội thoại kéo theo ảnh.** Ảnh mất nhiều phút để vẽ, và gallery là nơi người dùng giữ
+  ảnh; xoá ảnh là một thao tác riêng.
+
+## D21 — Sao lưu / khôi phục bằng một file zip, từ chối khi app đang chạy
+**Ngày:** 2026-10-22 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Lộ trình P3.4 cần backup/restore DB + ảnh. Dữ liệu nằm ở hai chỗ (`yumeai.db`
+chạy WAL và thư mục ảnh), nên copy tay dễ ra một bản thiếu: copy riêng file `.db` có thể thiếu
+những trang còn trong `-wal`, copy DB mà quên ảnh thì gallery toàn khung hỏng.
+
+**Quyết định.**
+
+1. `project/sao_luu.py`, chỉ thư viện chuẩn, gói **một zip**: `yumeai.db` chụp bằng backup API
+   của sqlite + `images/` + `manifest.json` (thời điểm, schema, số hội thoại/tin nhắn/ký ức/ảnh).
+   Ghi vào `.zip.part` rồi mới đổi tên — mất điện giữa chừng không để lại bản sao lưu dở.
+2. **Khôi phục từ chối khi cổng 8000/7860 đang có tiến trình** (main.py / app_gradio.py): thay DB
+   dưới chân tiến trình đang mở nó là hỏng dữ liệu.
+3. **Kiểm trước khi đụng:** có `yumeai.db`, `integrity_check = ok`, schema không mới hơn code.
+4. **Luôn sao lưu dữ liệu hiện tại trước khi thay** (`truoc-khoi-phuc-*.zip`), và xoá `-wal`/`-shm`
+   cũ để SQLite không áp nhật ký của DB cũ lên DB mới. Entry zip chỉ lấy tên file — không ghi ra
+   ngoài thư mục ảnh.
+
+**Đã loại.**
+
+- **Nút khôi phục trong `/app`.** Khôi phục phải chạy khi app đã tắt, nên không thể là một nút
+  của chính app đó.
+- **Tự sao lưu theo lịch.** Chưa có cơ chế chạy nền khi app tắt; để người dùng chủ động chạy,
+  thêm lịch sau nếu cần (Task Scheduler của Windows gọi được `python sao_luu.py`).
+
+## D22 — Đo hiệu năng ngay lúc dùng thật: chỉ số, nằm trên máy
+**Ngày:** 2026-10-22 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Lộ trình P3.5 cần token/giây, thời gian nạp model, thời gian từng job ảnh.
+`bench_baseline.py` (D17) đo một lần trong điều kiện dựng sẵn; nó không cho biết lúc dùng thật
+— lịch sử dài, VRAM vừa nhường cho ComfyUI — máy chạy ra sao. Chọn model chat (STATE việc 5)
+và báo trước cho người dùng một ảnh "Tốt nhất" mất bao lâu đều cần số thật của đúng máy này.
+
+**Quyết định.**
+
+1. `yumeai/core/perf.py`: mỗi lượt `/api/chat` và mỗi ảnh `/api/images/generate` nối **một dòng
+   JSON** vào `<YUMEAI_DATA_DIR>/perf.jsonl`.
+   - Chat: số từ chunk cuối của Ollama (eval, prompt_eval, load — nano giây đổi ra giây,
+     token/giây) + thời gian dựng ngữ cảnh, chờ chữ đầu, cả lượt, tính từ lúc server nhận tin.
+     Trạng thái `ok` / `empty` / `error` / `incomplete` / `cancelled`.
+   - Ảnh: dịch/viết prompt, ComfyUI (gồm bước nhường VRAM D16), cả lượt, preset, model, kích
+     thước. Trạng thái `ok` / `error` / `busy`.
+2. **Chỉ số, không nội dung:** không tin nhắn, prompt, tên hay user_id; lỗi chỉ ghi tên lớp lỗi.
+   Mỗi dòng có giờ đo, nên "Xoá toàn bộ dữ liệu" (D20) xoá luôn sổ. Sổ không vào file xuất
+   (D20) và không vào bản sao lưu (D21) — đo lại được, không đáng giữ.
+3. **Best-effort:** ghi lỗi chỉ cảnh báo một lần, không bao giờ làm hỏng lượt chat hay ảnh.
+   Tự xoay vòng ở ~2 MB, giữ đúng một bản `.1`. Tắt bằng `YUMEAI_PERF_LOG=0`.
+4. `GET /api/stats` trả trung vị/min/max trên 500 lần đo gần nhất, theo model chat và theo cặp
+   chất lượng + phóng to; chỉ lần `ok` mới vào thời gian. `/app` dùng nó để ghi "thường mất
+   khoảng…" ở màn Tạo ảnh và cạnh đồng hồ lúc vẽ.
+5. Chỉ `main.py` ghi; Gradio giữ nguyên (D19).
+
+**Đã loại.**
+
+- **Bảng trong SQLite.** Số đo không phải dữ liệu sản phẩm: không cần migration, không nên dính
+  vào xuất/sao lưu. JSON Lines đọc được bằng mắt và bằng bất kỳ công cụ nào.
+- **Gửi số đo ra khỏi máy.** Trái với lời màn chào: "YumeAI không gửi chúng đi đâu".
+- **Đo trong Gradio.** Khi pipeline ảnh tách sang `yumeai/pipelines/` (STATE việc 3) thì đo ở đó
+  cho cả hai cửa vào, thay vì chép logic đo vào `app_gradio.py`.
+- **Thanh tiến độ theo từng bước của ComfyUI** (websocket). Đáng làm nhưng là việc riêng; con số
+  "thường khoảng" đã cho người dùng một mốc để chờ.
+
+## D23 — Mở app bằng một cú bấm; Ollama nằm trên ổ rời, cổng riêng
+**Ngày:** 2026-10-26 · **Trạng thái:** đã chốt
+
+**Bối cảnh.** Mở app cần ba tiến trình trong ba cửa sổ (Ollama, ComfyUI, `main.py`) rồi tự mở
+trình duyệt. Dự án nằm trên ổ rời mang qua nhiều máy, nhưng Ollama và model của nó lại cài trên
+ổ C từng máy: máy mới là phải cài Ollama và `ollama pull` lại vài GB. Trên cùng ổ rời, PaoDich
+đã chạy Ollama bản zip (không cần cài) ở cổng mặc định 11434, với thư mục model riêng.
+
+**Quyết định.**
+
+1. `project/khoi_dong.py` + `MO-PAOCAKE.cmd` (gốc dự án): bật những gì còn thiếu, chạy `main.py`
+   (hoặc `--gradio`) ngay trong cửa sổ đó, mở `/app` khi `/health` trả lời. Chỉ thư viện chuẩn
+   (+ `bench_baseline.query_gpus` để đọc VRAM); dùng chính Python của `.venv` cho ComfyUI.
+2. Chọn Ollama theo thứ tự: `OLLAMA_URL` người dùng tự đặt → Ollama trên ổ rời
+   (`<ổ>\Ollama\ollama.exe`, model ở `<ổ>\Ollama\models`, cổng **11435**; chưa chạy thì bật ẩn)
+   → Ollama cài trên máy ở 11434 nếu đang chạy. Báo rõ khi thiếu Ollama hoặc thiếu đúng model
+   đang cấu hình, nhưng vẫn mở app.
+3. ComfyUI: GPU < 10 GB VRAM hoặc không đọc được → `--lowvram` (như trước); ≥ 12 GB → bỏ
+   `--lowvram` và `YUMEAI_LOW_VRAM_MODE=0` nếu người dùng chưa tự đặt. Máy mạnh không bị kẹt ở
+   chế độ tiết kiệm của máy 4 GB.
+4. Chỉ tắt cái chính nó bật (nhả model Ollama trước để trả VRAM), cả khi bấm X đóng cửa sổ;
+   cái đang chạy sẵn từ trước thì để nguyên.
+5. Log của Ollama vào thư mục tạm của Windows, không vào `data/`: log có giờ từng lượt chat, để
+   trong `data/` thì "Xoá toàn bộ dữ liệu" (D20) phải lo thêm nó.
+
+**Đã loại.**
+
+- **Dùng chung Ollama của PaoDich ở 11434.** Server nào bật trước thì thắng: app này sẽ không
+  thấy model của mình, PaoDich thì đi tải lại model dịch. Cổng riêng tránh được cả Ollama cài
+  sẵn trên máy.
+- **Cài Ollama vào từng máy.** Ngược với cách làm việc trên ổ rời; mỗi máy lại tải model.
+- **Để `main.py` tự bật Ollama/ComfyUI.** `main.py` là server; quản lý tiến trình con trong đó
+  làm khó tắt êm, và Gradio sẽ phải làm lại y hệt.
+
+## D24 — Model chat mặc định: qwen3:4b-instruct
+**Ngày:** 2026-10-26 · **Trạng thái:** đã chốt (chủ dự án đồng ý)
+
+**Bối cảnh.** STATE việc 5 cần chọn model chat bằng số đo chứ không bằng tên. `bench_chat.py` chạy
+trên laptop RTX 3050 4 GB (TESTLOG 26/10), cùng bộ thoại Pao/Su, 24 câu mỗi model.
+
+**Quyết định.** `OLLAMA_MODEL` mặc định đổi từ `qwen2.5:3b` sang `qwen3:4b-instruct`
+(`yumeai/core/config.py`, env.example, RUNBOOK; `khoi_dong.py` đọc đúng giá trị đó).
+
+| | qwen2.5:3b | qwen3:4b-instruct |
+|---|---|---|
+| Giữ vai (đạt mọi luật) | 17/24 | 23/24 |
+| Nhớ đúng thông tin trong trí nhớ | 0/4 | 3/4 |
+| Token/giây · cả câu | 64 · ~1 s | 15 · ~4 s |
+| Bộ nhớ | 2.0 GiB, 100% GPU | 3.3 GiB, 67% GPU |
+
+Đọc câu trả lời: qwen2.5:3b lẫn cả câu tiếng Trung, bịa thông tin người dùng, gạch đầu dòng khi bị
+dụ, có câu thô tục. Sản phẩm là "trò chuyện có trí nhớ" (AGENTS mục 1) và chủ dự án ưu tiên đúng
+hơn nhanh, nên chọn model giữ vai và nhớ tốt hơn, chấp nhận chậm hơn trên máy 4 GB.
+
+**Hệ quả cần theo dõi.** Dịch VI→EN và tóm tắt trí nhớ vẫn tự dò, ưu tiên `qwen2.5:3b`
+(`get_translate_model()`), nên trên GPU 4 GB Ollama có thể phải đổi qua lại hai model (nạp lại
+~4–6 giây). `/api/stats` (D22) đếm số lần nạp lại (`reloads`) theo model: nhiều thì đặt
+`YUMEAI_TRANSLATE_MODEL=qwen3:4b-instruct` để chỉ dùng một model — chưa làm vì chất lượng dịch prompt
+ảnh của qwen3 chưa được đo.
+
+**Đã loại.**
+
+- **Giữ qwen2.5:3b vì nhanh.** Nhanh mà tuột vai và quên tên người dùng thì hỏng đúng trụ sản phẩm.
+- **Chọn model theo VRAM của máy.** Chưa có số đo trên máy GPU lớn; chọn một mặc định, máy nào cần
+  nhanh thì `MO-PAOCAKE.cmd --model qwen2.5:3b` hoặc `OLLAMA_MODEL`.

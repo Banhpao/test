@@ -74,12 +74,14 @@ from PIL import Image
 # ══════════════════════════════════
 # CẤU HÌNH + SERVICES (đã tách module)
 # ══════════════════════════════════
-from yumeai.core.config import OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, CHAT_TIMEOUT_SEC
-from yumeai.core.personas import PERSONA, PERSONAS
+from yumeai.core.config import (
+    OLLAMA_URL, COMFY_URL, OLLAMA_MODEL, CHAT_TIMEOUT_SEC, OLLAMA_VISION_MODEL, ollama_options,
+)
+from yumeai.core.personas import PERSONA, PERSONA_ID_ALIASES, PERSONAS
 # Prompt text2img dùng CHUNG với main.py — xem yumeai/core/image_prompt.py
 from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
 # Lịch sử chat + options Ollama dùng CHUNG với main.py — xem yumeai/core/chat_context.py
-from yumeai.core.chat_context import build_persona_messages, chat_options
+from yumeai.core.chat_context import build_persona_messages, chat_options, history_load_limit
 
 # ══════════════════════════════════
 # TRÍ NHỚ BỀN VỮNG — cùng một file SQLite với main.py
@@ -99,7 +101,7 @@ from yumeai.storage import YumeDatabase
 
 try:
     _DATABASE = YumeDatabase(DATABASE_PATH)
-    _DATABASE.initialize(PERSONAS)
+    _DATABASE.initialize(PERSONAS, PERSONA_ID_ALIASES)
     print(f"💾 Trí nhớ bền vững: {DATABASE_PATH}")
 except Exception as _db_err:
     _DATABASE = None
@@ -145,6 +147,7 @@ from yumeai.services.comfy_service import (
     get_upscale_models,
     build_quality_workflow,
     QUALITY_BALANCED, UPSCALE_NONE,
+    free_comfy_vram,
 )
 
 
@@ -725,7 +728,7 @@ def build_smart_runners(
     kontext_prompt="",
     kontext_review=True,
     enrich=False,
-    persona_id="yuki",
+    persona_id="pao",
 ):
     """
     Gom các runner vào một dict.
@@ -1016,12 +1019,17 @@ def smart_execute(
     progress=_dummy_progress,
     runners=None,
     tool_once=None,
+    plan=None,
 ):
     """
     Bộ điều phối chính:
     - hiểu prompt
     - tự chọn pipeline
     - gọi runner phù hợp
+
+    plan: kết quả plan_request() bên gọi ĐÃ tính. Truyền vào để khỏi lập kế hoạch
+    lần hai — bản cũ gọi planner LLM thêm một lượt, và nếu lượt hai ra "chat" thì
+    người dùng nhận "Xong! Task: chat" mà không có ảnh lẫn câu trả lời.
     """
     text = (user_prompt or "").strip()
     has_image = input_image is not None
@@ -1126,13 +1134,14 @@ def smart_execute(
         }
         return {"task": "edit_clothes", "plan": plan, "assistant_text": None, "image": img, "info": info}
 
-    plan = plan_request(
-        text=text,
-        has_image=has_image,
-        has_outfit_image=has_outfit,
-        default_style=default_style,
-        use_llm_fallback=True,
-    )
+    if plan is None:
+        plan = plan_request(
+            text=text,
+            has_image=has_image,
+            has_outfit_image=has_outfit,
+            default_style=default_style,
+            use_llm_fallback=True,
+        )
 
     print("🧠 SMART PLAN:", json.dumps(plan, ensure_ascii=False, indent=2))
 
@@ -1719,6 +1728,10 @@ def _pil_to_base64_png(img: Image.Image) -> str:
 
 def _get_ollama_vision_model() -> str:
     """Tìm model vision đang có trong Ollama. Ưu tiên các model phổ biến."""
+    # Chỉ định thẳng bằng YUMEAI_VISION_MODEL thì dùng luôn, không dò theo tên —
+    # model vision có tên không chứa "vision/vl/llava" sẽ không bao giờ dò ra được.
+    if OLLAMA_VISION_MODEL:
+        return OLLAMA_VISION_MODEL
     preferred = [
         "moondream", "llava:7b", "llava", "minicpm-v", "qwen2.5vl", "qwen2.5-vl", "qwen2-vl",
         "llama3.2-vision", "llava:13b", "bakllava", "granite3.2-vision"
@@ -1782,8 +1795,11 @@ def describe_outfit_image(outfit_image, note_vi="") -> tuple[str, str]:
         "prompt": prompt,
         "images": [_pil_to_base64_png(img)],
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 120},
+        "think": False,
+        "options": ollama_options({"temperature": 0.1, "num_predict": 120}),
     }
+    # GPU 4GB: nhờ ComfyUI nhả VRAM trước khi Ollama nạp model vision (best-effort).
+    free_comfy_vram()
     try:
         with httpx.Client(timeout=120) as c:
             r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
@@ -1861,8 +1877,10 @@ def describe_scene_image(scene_image, user_note="") -> tuple[str, str]:
         "prompt": prompt,
         "images": [_pil_to_base64_png(img)],
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 160},
+        "think": False,
+        "options": ollama_options({"temperature": 0.0, "num_predict": 160}),
     }
+    free_comfy_vram()
     try:
         with httpx.Client(timeout=150) as c:
             r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
@@ -2441,8 +2459,11 @@ Return JSON only with keys:
         "prompt": prompt,
         "images": images_payload,
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 220},
+        "think": False,
+        "options": ollama_options({"temperature": 0.0, "num_predict": 220}),
     }
+    # Verify chạy ngay sau job Flux, lúc ComfyUI còn giữ model trong VRAM.
+    free_comfy_vram()
     try:
         with httpx.Client(timeout=VERIFY_TIMEOUT_SEC) as c:
             r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
@@ -3000,8 +3021,10 @@ def _detect_clothing_targets(scene_image, note_vi: str = "") -> str:
         "prompt": prompt,
         "images": [_pil_to_base64_png(img)],
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 60},
+        "think": False,
+        "options": ollama_options({"temperature": 0.0, "num_predict": 60}),
     }
+    free_comfy_vram()
     try:
         with httpx.Client(timeout=VERIFY_TIMEOUT_SEC) as c:
             r = c.post(f"{OLLAMA_URL}/api/generate", json=payload)
@@ -3538,18 +3561,22 @@ def _stream_persona_chat(history, user_msg, text, persona_id,
     memory_summary = None
     user_name = ""
     if conversation:
-        stored = _db_try("đọc lịch sử", _DATABASE.list_messages, conversation["id"]) or []
+        # Chỉ đọc phần lịch sử ngữ cảnh thật sự dùng (cửa sổ gần + cửa sổ tóm tắt).
+        # Gradio dùng MỘT hội thoại không bao giờ kết thúc cho mỗi nhân vật, nên đọc
+        # cả hội thoại mỗi lượt là chi phí tăng mãi theo thời gian.
+        total_text = _db_try("đếm lịch sử", _DATABASE.count_messages,
+                             conversation["id"], content_type="text") or 0
+        stored = _db_try("đọc lịch sử", _DATABASE.list_messages, conversation["id"],
+                         history_load_limit(total_text), content_type="text") or []
         prompt_history = [
             {"role": m["role"], "content": m["content"]}
             for m in stored
             if m.get("content_type", "text") == "text"
         ]
         user_name = (conversation.get("user_name") or "").strip()
-        # Ghi tin nhắn SAU khi đã đọc lịch sử: build_persona_messages tự nối câu vừa gõ
-        # vào cuối, đọc sau là câu đó bị đếm hai lần.
-        if (text or "").strip():
-            _db_try("lưu tin nhắn", _DATABASE.append_message,
-                    conversation["id"], "user", text)
+        # Tin nhắn người dùng KHÔNG ghi ở đây nữa mà ghi cùng câu trả lời (xem dưới):
+        # ghi trước khi gọi LLM thì Ollama lỗi là để lại lượt user mồ côi, gửi lại là
+        # nhân đôi câu đó trong lịch sử.
         # Hàm DÙNG CHUNG với main.py — không dựng lại ngữ cảnh riêng ở entrypoint (D6).
         memory_summary = _db_try(
             "dựng trí nhớ", build_conversation_memory,
@@ -3569,6 +3596,8 @@ def _stream_persona_chat(history, user_msg, text, persona_id,
                 "model": OLLAMA_MODEL,
                 "messages": messages,
                 "stream": True,
+                # Model biết "suy nghĩ" sẽ tiêu hết num_predict vào phần suy luận.
+                "think": False,
                 "options": chat_options(),
             }) as resp:
                 for line in resp.iter_lines():
@@ -3583,6 +3612,9 @@ def _stream_persona_chat(history, user_msg, text, persona_id,
                     yield _pack_main_outputs(current, img=None, keep_ref=keep_ref,
                                              keep_current=keep_current, next_tool_once=tool_once)
         if full.strip() and conversation:
+            if (text or "").strip():
+                _db_try("lưu tin nhắn", _DATABASE.append_message,
+                        conversation["id"], "user", text)
             _db_try("lưu câu trả lời", _DATABASE.append_message,
                     conversation["id"], "assistant", full.strip())
             # Trích fact chạy NỀN sau khi đã trả lời xong — nó gọi LLM lần nữa, để trên
@@ -3613,7 +3645,7 @@ def smart_unified_chat(
     cn_str, face_str,
     use_flux, flux_guidance, flux_steps, flux_turbo,
     flux_lora_str, kontext_prompt, kontext_review,
-    persona_id="yuki", enrich=True,
+    persona_id="pao", enrich=True,
 ):
     """
     Handler chính mới:
@@ -3721,7 +3753,16 @@ def smart_unified_chat(
                 progress=_dummy_progress,
                 runners=runners,
                 tool_once=_empty_tool_once(),
+                plan=plan,
             )
+            # Lưới đỡ: nhánh này mà vẫn ra "chat" thì trả lời như chat, đừng báo
+            # "✅ Xong! Task: chat" không ảnh không lời như bản cũ.
+            if result.get("task") == "chat":
+                yield from _stream_persona_chat(
+                    history, user_msg, text, persona_id,
+                    keep_ref=ref_image, keep_current=current_image, tool_once=tool_once,
+                )
+                return
             out_img = result["image"]
             new_hist = history + [
                 user_msg,
@@ -3811,7 +3852,7 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
                 )
                 with gr.Column(scale=5):
                     msg_input = gr.Textbox(
-                        placeholder='Nhắn với Yuki... hoặc "tạo ảnh [mô tả]"',
+                        placeholder='Nhắn với Pao... hoặc "tạo ảnh [mô tả]"',
                         show_label=False,
                         lines=3,
                         container=False,
@@ -3829,7 +3870,7 @@ with gr.Blocks(title="YumeAI 🌸") as demo:
         # ── Cột phải: Cài đặt ──────────────────
         with gr.Column(scale=1, min_width=200):
             gr.Markdown("### ⚙️ Cài đặt")
-            # Trước đây UI khoá cứng vào PERSONA (=Yuki): Hana có trong personas.py
+            # Trước đây UI khoá cứng vào PERSONA (=Pao, khi đó tên Yuki): Su (khi đó tên Hana) có trong personas.py
             # nhưng không cách nào gọi ra được từ giao diện.
             persona_dd = gr.Dropdown(
                 choices=[(v["name"], k) for k, v in PERSONAS.items()],

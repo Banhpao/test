@@ -6,10 +6,13 @@ YumeAI Ollama Service
 - Warmup model
 - Enrich prompt khi tạo ảnh mới
 """
+import re
 import time
 import httpx
 
-from yumeai.core.config import OLLAMA_URL, OLLAMA_MODEL
+from yumeai.core.config import (
+    OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TRANSLATE_MODEL, VRAM_HANDOFF, ollama_options,
+)
 
 def _pick_translate_model():
     """Trả về (model, chắc_chắn).
@@ -46,6 +49,9 @@ def get_translate_model(force_refresh: bool = False) -> str:
     Nay: chưa hỏi được thì lần gọi sau tự thử lại.
     """
     global _TRANSLATE_MODEL_CACHE
+    # Người dùng đã chỉ định thẳng bằng YUMEAI_TRANSLATE_MODEL → không dò theo tên nữa.
+    if OLLAMA_TRANSLATE_MODEL:
+        return OLLAMA_TRANSLATE_MODEL
     if force_refresh:
         _TRANSLATE_MODEL_CACHE = None
     if _TRANSLATE_MODEL_CACHE is None:
@@ -93,7 +99,10 @@ Examples:
                     {"role": "user", "content": vi_text}
                 ],
                 "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 50}
+                # think=False: model biết "suy nghĩ" (qwen3, deepseek-r1...) sẽ tiêu hết
+                # 50 token vào phần suy luận rồi trả content rỗng.
+                "think": False,
+                "options": ollama_options({"temperature": 0.1, "num_predict": 50})
             })
             en = r.json().get("message", {}).get("content", "").strip()
             en = en.split("\n")[0].replace('"','').replace("'","").strip()
@@ -125,7 +134,8 @@ def _ollama_chat(model, system, user, *, temperature=0.2, num_predict=160,
                     "messages": [{"role": "system", "content": system},
                                  {"role": "user", "content": user}],
                     "stream": False,
-                    "options": {"temperature": temperature, "num_predict": num_predict}
+                    "think": False,
+                    "options": ollama_options({"temperature": temperature, "num_predict": num_predict})
                 })
                 return r.json().get("message", {}).get("content", "").strip()
         except Exception as e:
@@ -145,7 +155,8 @@ def warmup_ollama():
                     "model": m,
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": False,
-                    "options": {"num_predict": 1}
+                    # Cùng num_gpu với lời gọi thật, nếu không warmup xong Ollama lại nạp lại.
+                    "options": ollama_options({"num_predict": 1})
                 })
             print(f"🔥 Warmup Ollama: {m} sẵn sàng")
         except Exception as e:
@@ -190,7 +201,8 @@ Examples:
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": vi_text}],
                 "stream": False,
-                "options": {"temperature": 0.6, "num_predict": 220}
+                "think": False,
+                "options": ollama_options({"temperature": 0.6, "num_predict": 220})
             })
             en = r.json().get("message", {}).get("content", "").strip()
             en = " ".join(en.splitlines())                       # gộp về 1 dòng
@@ -258,18 +270,24 @@ Không mở đầu, không kết luận, không giải thích. Nếu không có 
 
 
 # Model chat quá nhỏ thì không cách nào "thông minh" được, dù prompt có tốt đến đâu.
-_TINY_MARKERS = ("0.5b", "1b", "1.5b", "tinyllama", "qwen2.5:0.5b", "smollm")
+# Khớp cỡ model bằng regex, KHÔNG bằng `in`: bản cũ dò "1b" in name nên
+# "llama3.2-vision:11b" cũng bị coi là model tí hon. (?<![\d.]) chặn "11b", "21b", "0.1b".
+_TINY_RE = re.compile(r"(?<![\d.])(?:0\.5|1|1\.5)b(?![a-z0-9])|tinyllama|smollm", re.IGNORECASE)
 RECOMMENDED_CHAT_MODELS = [
+    ("~4GB RAM", "qwen3:4b-instruct", "mặc định — giữ vai, nhớ tốt nhất trong bench 26/10 (D24)"),
     ("~5GB RAM trở lên", "qwen2.5:7b", "tốt nhất cho tiếng Việt trong tầm chạy được"),
     ("~5GB RAM trở lên", "llama3.1:8b", "hội thoại tự nhiên, tiếng Việt khá"),
     ("~3GB RAM", "qwen2.5:3b", "nhẹ, tiếng Việt vẫn ổn — tối thiểu nên dùng"),
 ]
 
 
+def is_tiny_model(name: str) -> bool:
+    return _TINY_RE.search(name or "") is not None
+
+
 def check_chat_model() -> str:
     """Trả về chuỗi cảnh báo nếu model chat đang dùng quá nhỏ, '' nếu ổn."""
-    name = (OLLAMA_MODEL or "").lower()
-    if not any(m in name for m in _TINY_MARKERS):
+    if not is_tiny_model(OLLAMA_MODEL):
         return ""
     lines = [
         f"⚠️  Model chat đang dùng: {OLLAMA_MODEL} — đây là model RẤT NHỎ.",
@@ -280,3 +298,38 @@ def check_chat_model() -> str:
     for ram, model, note in RECOMMENDED_CHAT_MODELS:
         lines.append(f"     • {model:<16} {ram:<20} — {note}")
     return "\n".join(lines)
+
+
+def unload_ollama_models(timeout: float = 10) -> list[str]:
+    """Nhờ Ollama nhả khỏi VRAM mọi model đang nạp (keep_alive=0). Gọi trước job ComfyUI.
+
+    Ollama mặc định giữ model 5 phút sau mỗi lời gọi. Một yêu cầu ảnh bình thường là
+    dịch/enrich (Ollama) rồi NGAY LẬP TỨC job ComfyUI, nên trên GPU 4GB hai bên tranh
+    nhau VRAM. Best-effort: lỗi gì cũng chỉ in cảnh báo, không chặn job vẽ.
+    Trả về danh sách model đã nhả (để log/test).
+    """
+    if not VRAM_HANDOFF:
+        return []
+    unloaded: list[str] = []
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            r = c.get(f"{OLLAMA_URL}/api/ps")
+            r.raise_for_status()
+            for m in r.json().get("models", []) or []:
+                name = m.get("model") or m.get("name") or ""
+                # size_vram == 0: model đang chạy hẳn trên CPU (vd YUMEAI_OLLAMA_NUM_GPU=0),
+                # không chiếm VRAM — nhả ra chỉ tốn công nạp lại ở lượt chat sau.
+                if not name or m.get("size_vram") == 0:
+                    continue
+                try:
+                    resp = c.post(f"{OLLAMA_URL}/api/generate",
+                                  json={"model": name, "keep_alive": 0})
+                    if resp.status_code < 400:
+                        unloaded.append(name)
+                except Exception as e:
+                    print(f"⚠️ Không nhả được {name} khỏi VRAM (bỏ qua): {e}")
+    except Exception as e:
+        print(f"⚠️ Không hỏi được Ollama để nhả VRAM trước job ComfyUI (bỏ qua): {e}")
+    if unloaded:
+        print(f"🧹 Đã nhả {', '.join(unloaded)} khỏi VRAM trước job ComfyUI")
+    return unloaded

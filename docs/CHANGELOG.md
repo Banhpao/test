@@ -10,6 +10,66 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-10-26
+
+- Model chat mặc định đổi sang `qwen3:4b-instruct` (D24): `yumeai/core/config.py`, env.example, RUNBOOK; `khoi_dong.py` lấy mặc định từ `config.py` thay vì tự ghi tên model; `check_chat_model()` gợi ý thêm qwen3; `test_router.py` mục 14 kiểm mặc định mới. Model dịch / tóm tắt vẫn tự dò như cũ.
+- So model chat trên laptop (STATE việc 5, TESTLOG 26/10): `qwen3:4b-instruct` giữ vai 23/24, nhớ đúng 3/4; `qwen2.5:3b` 17/24, 0/4 nhưng nhanh gấp ~4 lần (64 so với 14.9 token/giây trên GPU 4 GB).
+- `bench_chat.py`: luật "Không nhận AI" bắt nhầm đại từ "ai" ("…không hỏi tên tao là ai") — `AI` giờ chỉ khớp chữ HOA. `test_bench_chat.py` thêm hai câu đó.
+- Mở app bằng một cú bấm (D23): `MO-PAOCAKE.cmd` gọi `project/khoi_dong.py` — bật Ollama trên ổ rời (`<ổ>\Ollama`, cổng 11435, model trên ổ nên máy nào cũng như nhau) hoặc dùng `OLLAMA_URL`/Ollama cài trên máy, bật ComfyUI trong cửa sổ thu nhỏ (`--lowvram` khi GPU < 10 GB; ≥ 12 GB thì VRAM bình thường + `YUMEAI_LOW_VRAM_MODE=0`), chạy `main.py` (hoặc `--gradio`), mở `/app` khi sẵn sàng; đóng thì tắt đúng những gì nó đã bật (kể cả bấm X). Báo rõ khi thiếu Ollama hay thiếu model đang cấu hình. `--model`, `--khong-comfy`, `--kiem-tra`. Test mới `test_khoi_dong.py` 22/22 (Ollama giả bằng HTTP server nhỏ).
+- RUNBOOK: mục "Mở bằng một cú bấm"; "So sánh model chat" chạy với Ollama trên ổ rời; bảng "Chuyển dự án sang máy khác" cập nhật `.venv` portable và Ollama trên ổ rời.
+- `test_storage.py` đóng kết nối sqlite bằng `contextlib.closing` trong hai test migration (v1, v2). `with sqlite3.connect()` chỉ commit chứ không đóng, nên trên Windows file `.db` còn bị giữ và `TemporaryDirectory.cleanup()` báo `WinError 32` — lỗi chỉ lộ ra khi chạy thật trên Windows (Linux cho xoá file đang mở). Cùng kiểu sửa đã làm cho `test_data_controls.py`, `test_rename_persona.py`.
+- `project\.venv` được tạo lại từ Python portable 3.11.16 trên ổ rời (trước trỏ vào `C:\Users\tinha\...\Python311` của một máy khác nên hỏng ở mọi máy còn lại), cài đúng 172 thư viện + phiên bản của môi trường cũ (gồm torch 2.12.1+cu130 và thư viện ComfyUI). Chạy thử trên Windows: 13 file test offline đạt, ComfyUI `--quick-test-for-ci` nạp đủ 8 custom node, `pip check` sạch, torch thấy GPU. Môi trường cũ cất ở `E:\duan\_backup_claude\moi-truong-cu\`.
+
+---
+
+## 2026-10-22
+
+- `bench_chat.py` so sánh model chat trên máy thật (STATE việc 5): cùng một bộ thoại cố định cho Pao và Su (6 câu mỗi nhân vật, có câu dụ nhận là AI, dụ gạch đầu dòng, hỏi bằng tiếng Anh, hỏi lại trí nhớ), dựng prompt bằng `build_persona_messages()` + `chat_options()` thật, bắt đầu bằng lời chào như hội thoại mới, đưa câu trả lời lại làm lịch sử. Đo nạp cold, bộ nhớ và % trên GPU (`/api/ps`), token/giây, chờ chữ đầu, cả câu; chấm giữ vai bằng luật (tiếng Việt, chữ Hán, emoji, liệt kê, nhận AI, xưng hô, độ dài/bị cắt, nhớ đúng). Không tải model (in lệnh `ollama pull`), không đụng DB/ComfyUI, từ chối khi ComfyUI đang vẽ; nhả model trước/sau mỗi model (`--no-free` để bỏ). Ghi `data/bench/chat_*.json` (kèm mọi câu trả lời) + khối TESTLOG. Dùng lại hàm dò máy của `bench_baseline.py`. Test mới `test_bench_chat.py` 20/20 (Ollama/ComfyUI giả bằng `httpx.MockTransport`).
+- Số đo hiệu năng thật (D22, lộ trình P3.5): mỗi lượt `/api/chat` ghi token/giây, số token prompt, thời gian Ollama nạp model (từ chunk cuối), thời gian dựng ngữ cảnh, chờ chữ đầu và cả lượt; mỗi ảnh `/api/images/generate` ghi thời gian dịch/viết prompt, ComfyUI vẽ, cả lượt, preset, model, kích thước. Nối vào `data/perf.jsonl` qua `yumeai/core/perf.py` (tự xoay vòng ~2 MB) — chỉ số, không nội dung, không user_id. `GET /api/stats` trả trung vị theo model và theo preset; `YUMEAI_PERF_LOG=0` để tắt. Response ảnh thêm trường `timing`. `/app`: màn Tạo ảnh ghi thời gian thường lệ đo trên máy này cho đúng mức chất lượng, đồng hồ lúc vẽ thêm "thường khoảng mm:ss". "Xoá toàn bộ dữ liệu" xoá luôn sổ đo (vì có giờ từng lượt). Test mới `test_perf.py` 19/19; `test_api_storage.py`, `test_chat_image_route.py` trỏ sổ đo vào thư mục tạm để không ghi vào `data/` thật. Bấm thử bằng Chromium: 17 nhóm đạt, sổ đo không chứa chữ nào của tin nhắn hay prompt.
+- DECISIONS D21: bỏ câu gợi ý gọi `sao_luu.py` từ một dự án khác; muốn chạy theo lịch thì dùng Task Scheduler của Windows.
+- Sao lưu / khôi phục (D21, lộ trình P3.4): `sao_luu.py` gói DB (backup API sqlite, đúng cả khi đang chạy WAL) + ảnh + manifest vào `data/backups/sao-luu-*.zip`; `--danh-sach`; `--khoi-phuc` từ chối khi main.py/app_gradio.py đang chạy, kiểm integrity + schema, hỏi lại, luôn lưu dữ liệu hiện tại trước, xoá -wal/-shm cũ. Chỉ thư viện chuẩn. Test mới `test_sao_luu.py` 11/11.
+- Quyền kiểm soát dữ liệu (D20, lộ trình P3): màn chào lần đầu ở `/app` ghi rõ nhân vật AI và chỗ lưu dữ liệu; `DELETE /api/gallery/{id}` (xoá cả file và tin nhắn ảnh), `DELETE /api/conversations/{id}` (giữ ảnh và ký ức), `GET /api/data/export` (zip `data.json` + ảnh), `POST /api/data/delete` (gõ "XOÁ", xoá thật + VACUUM, không đụng dữ liệu người khác). UI: nút xoá ảnh, nút xoá cuộc trò chuyện, hộp "Dữ liệu của bạn", hộp hỏi lại trước khi xoá. Test mới `test_data_controls.py` 8/8; `test_rename_persona.py` đóng kết nối sqlite rõ ràng (trên Windows kết nối còn mở làm thư mục tạm không xoá được). Bấm thử bằng Chromium: 17 nhóm thao tác đạt.
+- Xin ảnh ngay trong khung chat của `/app` (D19 mục 7): `POST /api/chat/intent` dùng chung `plan_request()` với Gradio để phân biệt trò chuyện và xin ảnh; `ImgReq.chat_message` lưu câu xin ảnh ngay trước ảnh, chỉ khi vẽ xong. Trong chat hiện thẻ "đang vẽ" có đồng hồ, xong ảnh hiện tại chỗ; ComfyUI tắt hoặc bộ vẽ bận thì báo rõ và trả lại chữ vào ô nhập. Test mới `test_chat_image_route.py` 8/8; bấm thử bằng Chromium: 12 nhóm thao tác đạt.
+- Làm lại giao diện `/app` theo bản thiết kế "Ngân hà hồng" (D19): bốn màn Trò chuyện · Tạo ảnh · Bộ sưu tập · Chọn nhân vật đổi bằng `#hash`; nền ngân hà tối dần xuống hồng dịu; ký ức thêm/sửa/xoá ngay trong bảng; màn Tạo ảnh có chọn nhân vật, kiểu ảnh, 4 mức chất lượng (mặc định Tốt nhất), phóng to, viết lời tả chi tiết, gửi ảnh vào hội thoại đang mở; Bộ sưu tập lọc theo nhân vật, xem chi tiết, vẽ lại với lời tả cũ; chọn nhân vật tạo hội thoại mới có lời chào. Màn hẹp ≤ 900px: thanh bên và hồ sơ thành ngăn kéo. Bộ gõ tiếng Việt: Enter lúc đang ghép chữ không gửi tin.
+- Test mới `test_web_ui.py` 9/9: UI chỉ gọi route có trong `main.py`, giá trị chất lượng/kiểu ảnh/phóng to khớp `comfy_service`, mặc định là mức kỹ nhất, `innerHTML` chỉ cho icon hằng số, `/app` trả đúng file. Đã bấm thử bằng Chromium với Ollama/ComfyUI giả và DB cũ còn id yuki/hana: 10 nhóm thao tác đạt, không lỗi console; DB tự đổi sang Pao/Su lúc khởi động.
+- Đổi tên nhân vật Yuki → Pao và Hana → Su (D18), cả tên hiển thị lẫn id (`yuki` → `pao`, `hana` → `su`); tính cách, xưng hô, ngoại hình giữ nguyên. `personas.py` thêm `PERSONA_ID_ALIASES` + `resolve_persona_id()`; `main.py` gom `persona_id` của 4 request model vào `_PersonaRef` (validator nhận id cũ), hai endpoint query `/api/memory` cũng nhận id cũ; Gradio và `chat-ui-mockup.html` đổi mặc định/nhãn.
+- `YumeDatabase.initialize()` nhận thêm `renamed_ids`; `rename_characters()` chuyển hội thoại, trí nhớ, ảnh của mọi id cũ sang id mới trong một transaction, một bản sao lưu trước vào `data/backups/truoc-doi-ten-yuki-thanh-pao-hana-thanh-su-*.db`, chỉ đổi tiêu đề tự sinh. DB mới hoặc đã chuyển thì không làm gì.
+- Test mới `test_rename_persona.py` 11/11 (chuyển dữ liệu + `foreign_key_check`, chỉ đổi tiêu đề tự sinh, một bản sao lưu còn dữ liệu cũ, lỗi giữa chừng thì không đổi dở, DB chỉ có một id cũ, trùng khoá trí nhớ, DB mới không sao lưu, API nhận id cũ, mặc định là Pao). Test cũ đổi sang `pao`/`su`: storage 13, memory 11, chat_context 15, api_storage 7, router, bench_baseline 48 — đều pass; ruff (F) sạch.
+
+---
+
+## 2026-10-21
+
+- Giai đoạn 0 (D17): thêm `bench_baseline.py` đo nền trên máy thật — GPU/VRAM (nvidia-smi), RAM, chỗ trống ổ chứa `ComfyUI/models` (cần ≥ 30 GiB), N job text2img SD1.5 đi đúng đường REST qua `run_comfy_job` (job 1 cold sau `/free`, còn lại warm; VRAM đỉnh lấy mẫu 0.5s; thời gian ComfyUI từ `/history`; giá nhả VRAM Ollama D16). Ghi `data/bench/pc0_baseline_*.json` + khối dán TESTLOG. Không khởi động dịch vụ, không đổi cấu hình, không ghi DB/gallery; prompt cố định, không persona.
+- Test offline `test_bench_baseline.py` 48/48 (chạy được không cần venv): nvidia-smi thiếu/hỏng/rác, ngưỡng đĩa, sampler VRAM, cold/warm, JSON + khối TESTLOG, ComfyUI/Ollama tắt, hàng đợi/Resource Guard bận, job lỗi giữa chừng, KSampler lấy từ cache, mặc định REST đọc từ `main.py` bằng ast.
+- DECISIONS: D17 thay một phần D9 — cho phép video ngắn từ ảnh persona, chỉ REST + `/app`, chỉ bật khi hồ sơ máy cho phép; vẫn không làm dịch vụ credit/cloud. RUNBOOK thêm mục "Đo nền (giai đoạn 0)"; STATE thêm việc 0.
+
+---
+
+## 2026-10-15
+
+- Sửa tiếp 3 lỗi cụ thể:
+  - `clean_history()` nhận content dạng list khối `{"type": "text"}` của Gradio 6 (bản cũ bỏ sạch các lượt đó khi Gradio không đọc được DB).
+  - Fact extraction: Ollama < 0.5 trả HTTP 400 khi `format` là JSON schema → thử lại một lần với `format: "json"` (trước đây trên Ollama cũ không lô nào trích được fact).
+  - `test_summary_cache_does_not_leak_between_conversations` dùng đủ một lô D13 và kiểm cả cache trúng đúng hội thoại; `test_api_storage.py` 7/7. Test mới: router (Gradio 6), memory 2.
+- Sửa 7 lỗi cụ thể (audit 2026-10-09), không đổi kiến trúc:
+  - VRAM (D16): trước mỗi job ComfyUI nhả model Ollama khỏi GPU (`keep_alive=0`, trong `run_comfy_job`); trước mỗi lời gọi vision nhờ ComfyUI `/free`. Tắt bằng `YUMEAI_VRAM_HANDOFF=0`. Thêm `YUMEAI_OLLAMA_NUM_GPU` (gửi `options.num_gpu` cho mọi lời gọi Ollama; trống = như cũ).
+  - Router Gradio: câu chat không ảnh không còn chờ planner LLM (chỉ hỏi khi câu nhắc tới ảnh/hình/chụp); `smart_execute` nhận lại plan đã tính thay vì lập kế hoạch lần hai; nhánh không ảnh ra `chat` thì trả lời như chat thay vì "Xong! Task: chat".
+  - Fact extraction: `num_ctx` = `CHAT_NUM_CTX` (hết nạp lại model), transcript tính theo num_ctx và giữ phần MỚI theo ranh giới message, `num_predict` 600, JSON schema trong `format`, JSON hỏng 3 lần liền thì bỏ qua lô thay vì kẹt mãi.
+  - `main.py` bỏ CORS `*` (UI `/app` cùng origin, không cần CORS).
+  - Model chat mặc định `qwen2.5:3b` như env.example/RUNBOOK; thêm `YUMEAI_VISION_MODEL`, `YUMEAI_TRANSLATE_MODEL`; gửi `think: false`; dò model tí hon bằng regex (`:11b` không còn bị coi là `1b`).
+  - Tin nhắn người dùng ghi cùng câu trả lời (hết lượt user mồ côi khi Ollama lỗi) ở cả REST và Gradio; chỉ đọc cửa sổ lịch sử cần dùng từ DB (`history_load_limit`, ranh giới lô khớp D13).
+  - `requirements.txt` ghim đúng bộ version đang chạy trong `.venv`.
+- Test mới: router +3 nhóm (13–15), storage 13, chat_context 15, memory 9, API 7 (1 test cũ vẫn fail từ trước, xem STATE).
+
+---
+
+## 2026-09-11
+
+- Chuẩn bị Wan 2.2 TI2V 5B: tải 3 file Comfy-Org vào đúng thư mục ComfyUI/models; SHA-256 và safetensors đạt; thêm workflow chính thức và bản thử 512x288/17 frames, kiểm tra node và model discovery đạt. RTX 3050 4GB: chưa thử sinh video, chưa tích hợp video vào YumeAI. Chi tiết E:/Python/WAN22_YUMEAI.md và manifests/wan22-5b.json.
+
+---
+
 ## 2026-08-21
 
 - Nối Gradio vào cùng SQLite với REST (D15): lịch sử prompt đọc từ DB nên mở lại app nhân vật vẫn nhớ; Gradio nay truyền user_name (trước đây chưa bao giờ có); khối trí nhớ gom vào memory_service.build_conversation_memory() dùng chung hai cửa vào, main.py bỏ bản copy; lỗi DB không giết chat (_db_try). Thêm get_or_create_conversation + 9 test, tổng 24 test offline.

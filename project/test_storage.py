@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 
@@ -9,8 +10,8 @@ from yumeai.storage.database import YumeDatabase
 
 
 PERSONAS = {
-    "yuki": {"name": "Yuki", "appearance": "black hair"},
-    "hana": {"name": "Hana", "appearance": "brown hair"},
+    "pao": {"name": "Pao", "appearance": "black hair"},
+    "su": {"name": "Su", "appearance": "brown hair"},
 }
 
 
@@ -26,7 +27,7 @@ class StorageTests(unittest.TestCase):
 
     def test_conversation_and_messages_survive_reopen(self):
         conv = self.db.create_conversation(
-            "user_001", "yuki", display_name="Minh"
+            "user_001", "pao", display_name="Minh"
         )
         self.db.append_message(conv["id"], "user", "Chào em")
         self.db.append_message(conv["id"], "assistant", "Hừ, chào.")
@@ -40,8 +41,8 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(reopened.get_conversation(conv["id"])["message_count"], 2)
 
     def test_list_conversations_is_scoped_by_user(self):
-        mine = self.db.create_conversation("user_001", "yuki")
-        self.db.create_conversation("user_002", "hana")
+        mine = self.db.create_conversation("user_001", "pao")
+        self.db.create_conversation("user_002", "su")
         self.db.append_message(mine["id"], "user", "Tin nhắn gần nhất")
 
         rows = self.db.list_conversations("user_001")
@@ -51,23 +52,23 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(rows[0]["last_message"], "Tin nhắn gần nhất")
 
     def test_memory_fact_upsert_does_not_duplicate_key(self):
-        self.db.create_conversation("user_001", "yuki")
-        self.db.upsert_memory_fact("user_001", "yuki", "drink", "trà")
-        self.db.upsert_memory_fact("user_001", "yuki", "drink", "cà phê")
+        self.db.create_conversation("user_001", "pao")
+        self.db.upsert_memory_fact("user_001", "pao", "drink", "trà")
+        self.db.upsert_memory_fact("user_001", "pao", "drink", "cà phê")
 
-        facts = self.db.list_memory_facts("user_001", "yuki")
+        facts = self.db.list_memory_facts("user_001", "pao")
 
         self.assertEqual(len(facts), 1)
         self.assertEqual(facts[0]["fact_value"], "cà phê")
 
     def test_gallery_keeps_generation_metadata(self):
-        conv = self.db.create_conversation("user_001", "yuki")
+        conv = self.db.create_conversation("user_001", "pao")
         image = self.db.record_image(
             conversation_id=conv["id"],
-            character_id="yuki",
+            character_id="pao",
             file_path="images/demo.png",
-            prompt="Yuki dưới mưa",
-            translated_prompt="Yuki in the rain",
+            prompt="Pao dưới mưa",
+            translated_prompt="Pao in the rain",
             model_used="sd15",
             style="Anime",
             seed=123,
@@ -79,13 +80,28 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(rows[0]["id"], image["id"])
         self.assertEqual(rows[0]["seed"], 123)
 
+    def test_recent_text_window_skips_image_messages(self):
+        """LIMIT phải áp lên message TEXT: N message cuối mà lẫn ảnh thì thiếu ngữ cảnh."""
+        conv = self.db.create_conversation("user_001", "pao")
+        for i in range(6):
+            self.db.append_message(conv["id"], "user", f"text {i}")
+            self.db.append_message(
+                conv["id"], "assistant", f'{{"image_id":"{i}"}}', content_type="image"
+            )
+        self.assertEqual(self.db.count_messages(conv["id"]), 12)
+        self.assertEqual(self.db.count_messages(conv["id"], content_type="text"), 6)
+        recent = self.db.list_messages(conv["id"], 3, content_type="text")
+        self.assertEqual([m["content"] for m in recent], ["text 3", "text 4", "text 5"])
+        self.assertEqual(len(self.db.list_messages(conv["id"], content_type="text")), 6)
+        self.assertEqual(len(self.db.list_messages(conv["id"])), 12)
+
     def test_invalid_message_role_is_rejected(self):
-        conv = self.db.create_conversation("user_001", "yuki")
+        conv = self.db.create_conversation("user_001", "pao")
         with self.assertRaises(ValueError):
             self.db.append_message(conv["id"], "tool", "Không hợp lệ")
 
     def test_memory_cursor_only_returns_unprocessed_text(self):
-        conv = self.db.create_conversation("user_001", "yuki")
+        conv = self.db.create_conversation("user_001", "pao")
         first = self.db.append_message(conv["id"], "user", "Tôi thích cà phê")
         self.db.append_message(conv["id"], "assistant", "Tớ nhớ rồi")
         image = self.db.append_message(
@@ -101,7 +117,7 @@ class StorageTests(unittest.TestCase):
 
     def test_schema_v1_is_migrated_without_losing_conversation(self):
         old_path = Path(self.tmp.name) / "old.db"
-        with sqlite3.connect(old_path) as conn:
+        with closing(sqlite3.connect(old_path)) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE users (
@@ -119,8 +135,8 @@ class StorageTests(unittest.TestCase):
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 INSERT INTO users VALUES ('u', '', 't', 't');
-                INSERT INTO characters VALUES ('yuki', 'Yuki', '{}', 't', 't');
-                INSERT INTO conversations VALUES ('c', 'u', 'yuki', 'old', '', 't', 't');
+                INSERT INTO characters VALUES ('pao', 'Pao', '{}', 't', 't');
+                INSERT INTO conversations VALUES ('c', 'u', 'pao', 'old', '', 't', 't');
                 PRAGMA user_version = 1;
                 """
             )
@@ -134,21 +150,21 @@ class StorageTests(unittest.TestCase):
 
     def test_get_or_create_reuses_the_open_conversation(self):
         """Gradio không chọn hội thoại — mở lại app phải nói tiếp, không tạo mới."""
-        first = self.db.get_or_create_conversation("user_001", "yuki")
+        first = self.db.get_or_create_conversation("user_001", "pao")
         self.db.append_message(first["id"], "user", "Chào em")
-        again = self.db.get_or_create_conversation("user_001", "yuki")
+        again = self.db.get_or_create_conversation("user_001", "pao")
 
         self.assertEqual(again["id"], first["id"])
         self.assertEqual(len(self.db.list_conversations("user_001")), 1)
         self.assertEqual(again["message_count"], 1)
 
     def test_get_or_create_separates_characters_and_users(self):
-        yuki = self.db.get_or_create_conversation("user_001", "yuki")
-        hana = self.db.get_or_create_conversation("user_001", "hana")
-        other = self.db.get_or_create_conversation("user_002", "yuki")
+        pao = self.db.get_or_create_conversation("user_001", "pao")
+        su = self.db.get_or_create_conversation("user_001", "su")
+        other = self.db.get_or_create_conversation("user_002", "pao")
 
-        self.assertNotEqual(yuki["id"], hana["id"])
-        self.assertNotEqual(yuki["id"], other["id"])
+        self.assertNotEqual(pao["id"], su["id"])
+        self.assertNotEqual(pao["id"], other["id"])
         self.assertEqual(len(self.db.list_conversations("user_001")), 2)
         self.assertEqual(len(self.db.list_conversations("user_002")), 1)
 
@@ -159,13 +175,13 @@ class StorageTests(unittest.TestCase):
         conversation_id NULL bị loại sạch — mà /api/gallery thì luôn truyền user_id.
         Ảnh vẫn nằm trong DB và trên đĩa nhưng không đường nào xem lại được.
         """
-        conv = self.db.create_conversation("user_001", "yuki")
+        conv = self.db.create_conversation("user_001", "pao")
         self.db.record_image(
-            character_id="yuki", file_path="trong_hoi_thoai.png", prompt="A",
+            character_id="pao", file_path="trong_hoi_thoai.png", prompt="A",
             user_id="user_001", conversation_id=conv["id"],
         )
         self.db.record_image(
-            character_id="yuki", file_path="mo_coi.png", prompt="B", user_id="user_001",
+            character_id="pao", file_path="mo_coi.png", prompt="B", user_id="user_001",
         )
 
         paths = sorted(r["file_path"] for r in self.db.list_images(user_id="user_001"))
@@ -175,9 +191,9 @@ class StorageTests(unittest.TestCase):
 
     def test_image_owner_is_inferred_from_conversation(self):
         """Quên truyền user_id nhưng có hội thoại thì vẫn suy ra được chủ."""
-        conv = self.db.create_conversation("user_001", "yuki")
+        conv = self.db.create_conversation("user_001", "pao")
         self.db.record_image(
-            character_id="yuki", file_path="suy_ra.png", prompt="A",
+            character_id="pao", file_path="suy_ra.png", prompt="A",
             conversation_id=conv["id"],
         )
         image = self.db.list_images(conversation_id=conv["id"])[0]
@@ -186,7 +202,7 @@ class StorageTests(unittest.TestCase):
     def test_schema_v2_backfills_image_owner(self):
         """Migration v2 → v3 phải gán chủ cho ảnh cũ, kể cả ảnh mồ côi."""
         old_path = Path(self.tmp.name) / "v2.db"
-        with sqlite3.connect(old_path) as conn:
+        with closing(sqlite3.connect(old_path)) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE users (
@@ -212,11 +228,11 @@ class StorageTests(unittest.TestCase):
                     created_at TEXT NOT NULL
                 );
                 INSERT INTO users VALUES ('u', '', 't', 't');
-                INSERT INTO characters VALUES ('yuki', 'Yuki', '{}', 't', 't');
-                INSERT INTO conversations VALUES ('c', 'u', 'yuki', 'old', '', 0, 't', 't');
-                INSERT INTO images VALUES ('i1', 'c', 'yuki', 'co_hoi_thoai.png', 'A',
+                INSERT INTO characters VALUES ('pao', 'Pao', '{}', 't', 't');
+                INSERT INTO conversations VALUES ('c', 'u', 'pao', 'old', '', 0, 't', 't');
+                INSERT INTO images VALUES ('i1', 'c', 'pao', 'co_hoi_thoai.png', 'A',
                     '', '', '', 1, '{}', 't');
-                INSERT INTO images VALUES ('i2', NULL, 'yuki', 'mo_coi.png', 'B',
+                INSERT INTO images VALUES ('i2', NULL, 'pao', 'mo_coi.png', 'B',
                     '', '', '', 2, '{}', 't');
                 PRAGMA user_version = 2;
                 """

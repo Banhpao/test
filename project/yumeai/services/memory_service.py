@@ -17,20 +17,55 @@ import httpx
 
 from yumeai.core.chat_context import summarize_old_history
 from yumeai.core.config import (
+    CHAT_NUM_CTX,
     MEMORY_EXTRACTION_BATCH_SIZE,
     MEMORY_EXTRACTION_EVERY_MESSAGES,
     MEMORY_EXTRACTION_TIMEOUT_SEC,
     MEMORY_FACTS_ENABLED,
     OLLAMA_MODEL,
     OLLAMA_URL,
+    ollama_options,
 )
 
 
 MAX_FACTS_PER_BATCH = 8
 FAILURE_COOLDOWN_SEC = 300
+# 8 fact tiếng Việt dạng JSON cần ~400-500 token. Bản cũ cho 320 nên JSON hay bị cắt
+# giữa chừng → parse lỗi → con trỏ không tiến → CÙNG lô đó lỗi lại mãi sau mỗi cooldown.
+MEMORY_NUM_PREDICT = 600
+# Sau từng này lần LIÊN TIẾP model trả JSON hỏng trên cùng một hội thoại thì bỏ qua lô
+# đó (vẫn tiến con trỏ) thay vì kẹt vĩnh viễn. Lỗi mạng/Ollama tắt KHÔNG tính vào đây.
+MAX_PARSE_FAILURES = 3
+# Ước lượng thô, cố ý thấp (tiếng Việt có dấu tốn token hơn tiếng Anh) để transcript
+# không vượt num_ctx — vượt là Ollama cắt input âm thầm.
+_CHARS_PER_TOKEN = 2.5
+_PROMPT_OVERHEAD_TOKENS = 64
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 _FAILURE_UNTIL: dict[str, float] = {}
+_PARSE_FAILURES: dict[str, int] = {}
+
+# Ollama >= 0.5 nhận JSON schema ở `format` và ép output theo đúng schema (grammar),
+# chặt hơn "json" trơn: model không thể bịa khoá khác hay sinh quá 8 fact.
+FACTS_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "facts": {
+            "type": "array",
+            "maxItems": MAX_FACTS_PER_BATCH,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["key", "value", "confidence"],
+            },
+        },
+    },
+    "required": ["facts"],
+}
 
 # Không tự động lưu bí mật hoặc định danh có thể gây hại nếu DB bị lộ. Người dùng
 # vẫn có thể chủ động thêm một fact khác qua API, nhưng extractor phải bảo thủ.
@@ -46,6 +81,8 @@ class MemoryExtractionResult:
     success: bool
     facts: list[dict]
     error: str = ""
+    # True = Ollama CÓ trả lời nhưng nội dung không parse được (khác lỗi mạng).
+    parse_failed: bool = False
 
 
 def _conversation_lock(conversation_id: str) -> threading.Lock:
@@ -74,13 +111,17 @@ def parse_memory_response(raw: str) -> MemoryExtractionResult:
     try:
         payload = json.loads(text)
     except Exception as exc:
-        return MemoryExtractionResult(False, [], f"JSON không hợp lệ: {exc}")
+        return MemoryExtractionResult(False, [], f"JSON không hợp lệ: {exc}", parse_failed=True)
 
     if not isinstance(payload, dict) or "facts" not in payload:
-        return MemoryExtractionResult(False, [], "Thiếu object JSON có trường facts")
+        return MemoryExtractionResult(
+            False, [], "Thiếu object JSON có trường facts", parse_failed=True
+        )
     candidates = payload.get("facts")
     if not isinstance(candidates, list):
-        return MemoryExtractionResult(False, [], "Trường facts không phải danh sách")
+        return MemoryExtractionResult(
+            False, [], "Trường facts không phải danh sách", parse_failed=True
+        )
 
     facts = []
     seen = set()
@@ -104,16 +145,51 @@ def parse_memory_response(raw: str) -> MemoryExtractionResult:
     return MemoryExtractionResult(True, facts)
 
 
-def extract_memory_facts(messages: list[dict]) -> MemoryExtractionResult:
-    """Gọi model chat đang có để trích tối đa 8 fact ổn định về người dùng."""
-    transcript = "\n".join(
+def _transcript_budget_chars(system_prompt: str, num_ctx: int = CHAT_NUM_CTX) -> int:
+    """Số ký tự transcript tối đa để system + transcript + output vừa num_ctx."""
+    system_tokens = int(len(system_prompt) / _CHARS_PER_TOKEN)
+    free_tokens = num_ctx - MEMORY_NUM_PREDICT - system_tokens - _PROMPT_OVERHEAD_TOKENS
+    return max(500, int(free_tokens * _CHARS_PER_TOKEN))
+
+
+def build_memory_transcript(messages: list[dict], budget_chars: int) -> str:
+    """Ghép transcript, giữ các dòng MỚI NHẤT vừa ngân sách, cắt theo ranh giới message.
+
+    Bản cũ dùng [:7000] — giữ 7000 ký tự ĐẦU — đúng kiểu cắt AGENTS.md mục 7 cấm:
+    phần mới nhất của lô bị vứt mà con trỏ vẫn tiến qua nó, nên các message đó không
+    bao giờ được đọc. Thêm nữa 7000 ký tự vượt context 2K mà extractor dùng.
+    Nay ngân sách tính từ num_ctx; lô vẫn dài hơn thì bỏ vài message CŨ NHẤT của lô
+    (có in cảnh báo) — fact mới nhất mới là thứ đáng giữ.
+    """
+    lines = [
         f"{item.get('role', '?')}: {item.get('content', '')}"
         for item in messages
         if item.get("content_type", "text") == "text"
-    )[:7000]
-    if not transcript.strip():
-        return MemoryExtractionResult(True, [])
+    ]
+    kept: list[str] = []
+    budget = budget_chars
+    for line in reversed(lines):
+        if budget - len(line) - 1 < 0:
+            break
+        kept.append(line)
+        budget -= len(line) + 1
+    if not kept and lines:
+        # Một message duy nhất dài hơn cả ngân sách: vẫn gửi phần cuối của nó.
+        return lines[-1][-budget_chars:]
+    if len(kept) < len(lines):
+        print(f"⚠️ Lô trí nhớ dài hơn context: bỏ {len(lines) - len(kept)} message cũ nhất")
+    return "\n".join(reversed(kept))
 
+
+def _format_schema_rejected(response) -> bool:
+    """True nếu Ollama trả 400 vì không hiểu JSON schema trong trường `format`."""
+    if getattr(response, "status_code", 200) != 400:
+        return False
+    return "format" in str(getattr(response, "text", "")).lower()
+
+
+def extract_memory_facts(messages: list[dict]) -> MemoryExtractionResult:
+    """Gọi model chat đang có để trích tối đa 8 fact ổn định về người dùng."""
     system = """Bạn là bộ trích xuất trí nhớ cho ứng dụng AI companion local.
 Chỉ lưu điều NGƯỜI DÙNG nói rõ và có ích ở những lần trò chuyện sau: tên muốn
 được gọi, sở thích/ghét, nghề nghiệp, mục tiêu, sự kiện đang diễn ra, cách xưng hô,
@@ -124,22 +200,39 @@ Trả về JSON đúng dạng:
 {"facts":[{"key":"snake_case_english","value":"giá trị ngắn bằng tiếng Việt","confidence":0.0}]}
 Tối đa 8 fact. Nếu không có gì đáng nhớ, trả {"facts":[]}. Không markdown."""
 
+    transcript = build_memory_transcript(messages, _transcript_budget_chars(system))
+    if not transcript.strip():
+        return MemoryExtractionResult(True, [])
+
     try:
         with httpx.Client(timeout=MEMORY_EXTRACTION_TIMEOUT_SEC) as client:
-            response = client.post(f"{OLLAMA_URL}/api/chat", json={
+            payload = {
                 "model": OLLAMA_MODEL,
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": transcript},
                 ],
-                "format": "json",
+                "format": FACTS_JSON_SCHEMA,
                 "stream": False,
-                "options": {
+                "think": False,
+                # num_ctx PHẢI bằng của chat (CHAT_NUM_CTX): cùng model mà khác num_ctx
+                # là Ollama nạp lại model cho mỗi lô, rồi nạp lại lần nữa ở lượt chat
+                # kế tiếp. Bản cũ dùng 2048 trong khi chat dùng 4096.
+                "options": ollama_options({
                     "temperature": 0.1,
-                    "num_ctx": 2048,
-                    "num_predict": 320,
-                },
-            })
+                    "num_ctx": CHAT_NUM_CTX,
+                    "num_predict": MEMORY_NUM_PREDICT,
+                }),
+            }
+            response = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            if _format_schema_rejected(response):
+                # Ollama < 0.5 chỉ hiểu format="json", gặp JSON schema thì trả 400.
+                # Bản trước không thử lại nên trên Ollama cũ không lô nào trích được
+                # fact. Thử lại MỘT lần với "json" — prompt hệ thống đã mô tả đúng dạng.
+                print("⚠️ Ollama không nhận JSON schema trong 'format' → thử lại với format=\"json\"")
+                response = client.post(
+                    f"{OLLAMA_URL}/api/chat", json={**payload, "format": "json"},
+                )
             response.raise_for_status()
             raw = response.json().get("message", {}).get("content", "")
     except Exception as exc:
@@ -215,12 +308,26 @@ def refresh_conversation_memory(database, conversation_id: str) -> dict:
             return {"status": "missing", "facts": 0}
 
         result = extract_memory_facts(messages)
+        source_message_id = messages[-1]["id"]
         if not result.success:
+            if result.parse_failed:
+                failures = _PARSE_FAILURES.get(conversation_id, 0) + 1
+                if failures >= MAX_PARSE_FAILURES:
+                    # Cùng một lô làm model trả JSON hỏng nhiều lần liền: bỏ qua lô này
+                    # để các message SAU nó còn được xử lý, thay vì kẹt vĩnh viễn ở đây.
+                    database.mark_memory_processed(conversation_id, source_message_id)
+                    _PARSE_FAILURES.pop(conversation_id, None)
+                    _FAILURE_UNTIL.pop(conversation_id, None)
+                    print(
+                        f"⚠️ Memory extraction: JSON hỏng {failures} lần liền → bỏ qua lô "
+                        f"{len(messages)} message ({result.error})"
+                    )
+                    return {"status": "skipped", "facts": 0, "error": result.error}
+                _PARSE_FAILURES[conversation_id] = failures
             _FAILURE_UNTIL[conversation_id] = time.monotonic() + FAILURE_COOLDOWN_SEC
             print(f"⚠️ Memory extraction lỗi: {result.error}")
             return {"status": "error", "facts": 0, "error": result.error}
 
-        source_message_id = messages[-1]["id"]
         for fact in result.facts:
             database.upsert_memory_fact(
                 conversation["user_id"],
@@ -233,6 +340,7 @@ def refresh_conversation_memory(database, conversation_id: str) -> dict:
         # Kể cả batch không có fact, đánh dấu đã xem để không gọi lại vô hạn.
         database.mark_memory_processed(conversation_id, source_message_id)
         _FAILURE_UNTIL.pop(conversation_id, None)
+        _PARSE_FAILURES.pop(conversation_id, None)
         if result.facts:
             print(
                 f"🧠 Đã lưu {len(result.facts)} memory fact cho conversation "
