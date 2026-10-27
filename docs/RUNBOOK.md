@@ -38,23 +38,32 @@ Cách cũ, ba cửa sổ riêng, vẫn dùng được như dưới.
 ## Khởi động bằng tay (3 tiến trình, 3 cửa sổ riêng)
 
 ### 1. Ollama — BẮT BUỘC (chat, dịch, vision)
-```bash
-ollama serve
+
+Bản trên ổ rời (giống `MO-PAOCAKE.cmd` bật), PowerShell:
+```powershell
+$env:OLLAMA_HOST="127.0.0.1:11435"; $env:OLLAMA_MODELS="E:\Ollama\models"
+E:\Ollama\ollama.exe serve
+# Cửa sổ chạy app (bước 3) cần biết cổng này:
+$env:OLLAMA_URL="http://127.0.0.1:11435"
 ```
-Kiểm tra: `ollama list` phải thấy model chat, model dịch và model vision.
+Hoặc Ollama cài trên máy: `ollama serve` (cổng 11434 — mặc định của `OLLAMA_URL`, không cần đặt).
+
+Kiểm tra: `ollama list` (với bản ổ rời: đặt `$env:OLLAMA_HOST` như trên trước) phải thấy model
+chat, model dịch và model vision.
 
 Model cần có:
 | Vai trò | Model | Ghi chú |
 |---|---|---|
 | Chat | `qwen3:4b-instruct` (mặc định, D24) | `qwen2.5:3b` nhanh hơn ~4 lần trên GPU 4 GB nhưng giữ vai kém hơn; `llama3.2:1b` quá nhỏ, app sẽ cảnh báo |
 | Dịch VI→EN, tóm tắt trí nhớ | `qwen2.5:3b` | tự dò, ưu tiên qwen2.5; ép bằng `YUMEAI_TRANSLATE_MODEL` |
-| Vision | `qwen2.5vl` | mô tả ảnh cho pipeline đổi đồ |
+| Vision | `qwen2.5vl` | mô tả ảnh cho pipeline đổi đồ — **chưa có** trong Ollama trên ổ rời (MAY.md) |
 
 ### 2. ComfyUI — BẮT BUỘC nếu muốn có ảnh
 ```bash
 cd project/ComfyUI
 python main.py --lowvram
 ```
+`--lowvram` khi GPU dưới 10 GB VRAM (máy hiện tại cần — MAY.md); từ 12 GB thì bỏ.
 Đợi dòng `To see the GUI go to: http://127.0.0.1:8188`.
 
 ### 3. Cửa vào — chọn một
@@ -125,8 +134,10 @@ cold/warm, VRAM đỉnh và giá nhả VRAM Ollama (D16). Bench **không** khở
 Mở 3 cửa sổ PowerShell, dùng đúng Python bạn vẫn chạy `main.py`:
 
 ```powershell
-# Cửa sổ 1 — Ollama (không bắt buộc; thiếu thì D16 ghi "Ollama không chạy")
-ollama serve
+# Cửa sổ 1 — Ollama (không bắt buộc; thiếu thì D16 ghi "Ollama không chạy").
+# Bản trên ổ rời như mục "Khởi động bằng tay"; nhớ đặt $env:OLLAMA_URL ở cửa sổ 3.
+$env:OLLAMA_HOST="127.0.0.1:11435"; $env:OLLAMA_MODELS="E:\Ollama\models"
+E:\Ollama\ollama.exe serve
 
 # Cửa sổ 2 — ComfyUI, khởi động lại NGAY TRƯỚC khi đo để job 1 là cold thật.
 # Đợi dòng "To see the GUI go to: http://127.0.0.1:8188".
@@ -135,6 +146,7 @@ python main.py --lowvram
 
 # Cửa sổ 3 — đóng app_gradio.py/main.py nếu đang vẽ, rồi:
 cd E:\duan\Paocake_ai\project
+$env:OLLAMA_URL="http://127.0.0.1:11435"   # khi dùng Ollama trên ổ rời
 python bench_baseline.py --check-only    # 1) chỉ xem GPU/RAM/đĩa/dịch vụ, không vẽ
 python bench_baseline.py                 # 2) 3 job: job 1 cold + 2 job warm
 python bench_baseline.py --warm-ollama   # 3) nạp model Ollama trước mỗi job → đo D16 thật
@@ -284,7 +296,8 @@ rồi bấm 🔄 Refresh trong UI.
 
 ### "⚠️ KHÔNG dịch được sang tiếng Anh"
 Ollama chưa chạy. Prompt tiếng Việt đang vào thẳng Stable Diffusion → ảnh sẽ rác.
-Bật `ollama serve` rồi thử lại.
+Ollama chưa chạy hoặc `OLLAMA_URL` trỏ sai cổng. Mở bằng `MO-PAOCAKE.cmd` (tự bật Ollama trên ổ
+rời), hoặc bật Ollama như mục "Khởi động bằng tay", rồi thử lại.
 
 ### "⚠️ YumeAI đang xử lý job khác"
 Resource Guard chặn 2 job ComfyUI chạy chồng (bảo vệ VRAM). Đợi job hiện tại xong.

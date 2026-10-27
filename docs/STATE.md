@@ -1,6 +1,7 @@
 # Trạng thái dự án — YumeAI
 
-**Cập nhật lần cuối:** 2026-10-26 · **Nhánh:** `review-fixes`
+**Cập nhật lần cuối:** 2026-10-27 · **Nhánh:** `review-fixes` (đã đẩy lên GitHub `Banhpao/test` ngày 27/10) ·
+**Máy đang dùng:** [`MAY.md`](MAY.md)
 
 Trả lời đúng ba câu: đang chạy được gì, đang hỏng/thiếu gì, làm gì tiếp.
 Cập nhật file này khi xong việc lớn hoặc phát hiện vấn đề lớn.
@@ -102,6 +103,11 @@ cache tóm tắt đã sửa để đủ một lô D13). Chưa chạy trên máy 
 48/48 (cả Python không có venv); các test cũ cho kết quả như trước khi thêm bench. Bench
 **chưa chạy trên máy thật** — đó là việc 0 bên dưới.
 
+**Kiểm chứng 2026-10-26** (Windows, laptop RTX 3050, `project\.venv` mới trên ổ rời, sau D24):
+`E:\duan\_vscode\KIEM-THU-DU-AN.cmd` — **15/15 đạt**: 14 file test offline + ComfyUI
+`--quick-test-for-ci --cpu` khởi động và nạp custom node (nhật ký `_vscode\nhat-ky\LAPTOP-1AMPNHOP-20261026-191352-kiem-thu.txt`).
+Vẫn dùng Ollama/ComfyUI giả trong test; chưa vẽ ảnh thật lần nào.
+
 **Số đo sau D13** (60 lượt chat): lời gọi LLM tóm tắt **54 → 18**; payload gửi vào
 LLM từ không giới hạn → tối đa 40 message.
 
@@ -128,6 +134,8 @@ LLM từ không giới hạn → tối đa 40 message.
 | Ảnh từ Gradio chưa vào gallery | Bảng `images` mới chỉ được ghi ở đường REST. Cần hook ở `runtime.run_comfy_job` — điểm nghẽn duy nhất mà cả 8 chỗ gọi đều đi qua (D15). |
 | Chưa test ảnh tự động | Test mới phủ storage/API; ComfyUI workflow vẫn cần service/model thật. |
 | `ComfyUI/` không trong git | 93GB model + custom nodes phải copy/cài riêng khi chuyển máy. |
+| Video Wan 2.2 5B mới chuẩn bị | 3 file Comfy-Org đã tải, đối chiếu SHA-256, ComfyUI nhận model/node; có workflow mẫu và bản thử 512x288, 17 khung hình trong `ComfyUI/user/default/workflows`. **Chưa sinh video lần nào**, chưa tích hợp vào YumeAI (D17). Muốn giữ đủ bộ model và làm cấu hình cho nhiều loại máy ở bước sau. Chi tiết: `E:/Python/WAN22_YUMEAI.md`, `E:/Python/manifests/wan22-5b.json`. |
+| Chưa có model vision trên ổ rời | Pipeline đổi đồ cần `qwen2.5vl` (RUNBOOK); Ollama trên ổ rời mới có `qwen3:4b-instruct` và `qwen2.5:3b`. Chỉ ảnh hưởng Gradio (pipeline ảnh nâng cao). |
 
 ---
 
@@ -185,9 +193,4 @@ Chi tiết: [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md).
 
 Model local nhỏ không cần trở thành trợ lý thông thái. Với companion, ưu tiên là
 giữ vai, nhớ đúng, phản hồi tự nhiên và nhất quán hình ảnh. Mọi tính năng mới phải
-được đánh giá theo bốn tiêu chí đó và giới hạn phần cứng Radeon 680M.
-
-
-## Chuẩn bị Wan 2.2 5B trên ổ rời
-
-Đã tải đủ 3 file Comfy-Org, đối chiếu SHA-256 và kiểm tra ComfyUI nhận model/node. Có workflow mẫu chính thức và bản thử 512x288, 17 khung hình trong ComfyUI/user/default/workflows. Chưa chạy sinh video hoặc tích hợp video vào YumeAI. Người dùng muốn giữ đủ bộ model và phát triển cấu hình chạy cho nhiều loại máy từ yếu đến mạnh ở bước sau. Chi tiết: E:/Python/WAN22_YUMEAI.md và E:/Python/manifests/wan22-5b.json.
+được đánh giá theo bốn tiêu chí đó và giới hạn phần cứng của máy đang dùng ([`MAY.md`](MAY.md)).

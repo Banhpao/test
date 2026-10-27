@@ -14,6 +14,7 @@ trí nhớ + ảnh của chính nhân vật đó*, **không phải** công cụ 
 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Đã đổi gì, ngày nào |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Lệnh khởi động, xử lý sự cố |
 | [`docs/TESTLOG.md`](docs/TESTLOG.md) | Kết quả chạy thử trên các máy khác nhau |
+| [`docs/MAY.md`](docs/MAY.md) | Máy đang dùng và giới hạn phần cứng — nơi duy nhất ghi điều này |
 
 Trước khi sửa code: `cd project && python test_router.py`
 Sau khi sửa code: `cd project && python devlog.py "mô tả thay đổi"`

@@ -10,6 +10,15 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-10-27
+
+- Tài liệu (không đổi mã): thêm `docs/MAY.md` — nơi duy nhất ghi máy đang dùng (laptop RTX 3050 4 GB, Ollama trên ổ rời cổng 11435) và hệ quả cho code; AGENTS mục 5, STATE, TESTLOG, PRODUCT_ROADMAP dẫn link về đó thay vì chép thông số. Bỏ chỗ gọi Radeon 680M là "máy hiện tại"; sơ đồ code `formyhorny/` → `Paocake_ai/`.
+- AGENTS mục 4: chạy mọi `project/test_*.py` (hoặc `E:\duan\_vscode\KIEM-THU-DU-AN.cmd`) thay vì liệt kê tay sáu file; ghi `test_auto_outfit.py` là công cụ thử tay. RUNBOOK: chạy tay Ollama trên ổ rời (`OLLAMA_HOST`/`OLLAMA_MODELS`/`OLLAMA_URL`), ghi `qwen2.5vl` chưa có trên ổ rời.
+- PRODUCT_ROADMAP đánh dấu đã làm: P2.3 (D19), P3.1 và P3.3 (D20), P3.4 (D21), P3.5 (D22). STATE: thêm lần kiểm thử Windows 26/10 (15/15 đạt), chuyển mục Wan 2.2 vào bảng nợ kỹ thuật.
+- Nhánh `review-fixes` đã commit (`ff6dade`) và đẩy lên GitHub `Banhpao/test` — commit đầu tiên kể từ 21/8.
+
+---
+
 ## 2026-10-26
 
 - Model chat mặc định đổi sang `qwen3:4b-instruct` (D24): `yumeai/core/config.py`, env.example, RUNBOOK; `khoi_dong.py` lấy mặc định từ `config.py` thay vì tự ghi tên model; `check_chat_model()` gợi ý thêm qwen3; `test_router.py` mục 14 kiểm mặc định mới. Model dịch / tóm tắt vẫn tự dò như cũ.

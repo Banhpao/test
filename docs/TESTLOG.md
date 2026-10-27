@@ -5,10 +5,10 @@ Người/AI đọc file này để biết cái gì thực sự chạy được �
 
 Mục mới nhất ở **trên cùng**.
 
-> **Vì sao cần file này:** máy phát triển chính dùng iGPU AMD Radeon 680M với 4GB
-> "VRAM" cắt từ RAM (xem `DECISIONS.md` D3). Rất nhiều giới hạn trong code là do
-> phần cứng đó. Khi test trên máy khác, ghi lại đây để biết giới hạn nào là **thật**
-> và giới hạn nào chỉ là **do máy yếu**.
+> **Vì sao cần file này:** nhiều giới hạn trong code được đặt cho máy phát triển yếu —
+> trước đây là iGPU AMD Radeon 680M (`DECISIONS.md` D3), nay là laptop RTX 3050 4 GB
+> ([`MAY.md`](MAY.md) ghi máy đang dùng). Khi test trên máy khác, ghi lại đây để biết giới
+> hạn nào là **thật** và giới hạn nào chỉ là **do máy yếu**.
 
 ---
 
@@ -85,7 +85,7 @@ Trung vị trên mọi câu; "Giữ vai" = số câu đạt mọi luật / số 
 ## YYYY-MM-DD — <tên/mô tả máy>
 
 **Phần cứng**
-- GPU:            (vd RTX 3060 12GB rời / Radeon 680M iGPU)
+- GPU:            (vd RTX 3060 12GB rời / RTX 3050 Laptop 4GB / Radeon 680M iGPU — máy cũ)
 - VRAM:
 - RAM:
 - HĐH:
@@ -117,8 +117,9 @@ Trung vị trên mọi câu; "Giữ vai" = số câu đạt mọi luật / số 
 
 ## Tham chiếu máy phát triển trước đây
 
-Máy phát triển hiện tại: AMD Radeon 680M (iGPU), 4GB VRAM chia từ 16GB RAM,
-hệ điều hành thấy ~12.4GB. Số liệu tham chiếu từ máy này:
+Máy phát triển **trước đây** (trước 11/9/2026): AMD Radeon 680M (iGPU), 4GB VRAM chia từ
+16GB RAM, hệ điều hành thấy ~12.4GB. Máy đang dùng: [`MAY.md`](MAY.md). Số liệu tham chiếu
+từ máy Radeon cũ:
 
 | Hạng mục | Thời gian |
 |---|---|
@@ -127,7 +128,7 @@ hệ điều hành thấy ~12.4GB. Số liệu tham chiếu từ máy này:
 | Đổi đồ 2 nhân vật (trước khi cache vision) | ~8 lần gọi vision |
 | Đổi đồ 2 nhân vật (sau khi cache) | ~4 lần gọi vision |
 
-**Những thứ chưa bao giờ chạy được trên máy này — cần test khi có máy mạnh:**
+**Những thứ chưa bao giờ chạy được trên máy Radeon cũ (và chưa thử trên RTX 3050 4 GB) — cần test khi có máy mạnh:**
 
 - [ ] SDXL checkpoint (hiện `get_checkpoint_model()` lọc bỏ có chủ đích)
 - [ ] Flux Kontext quant Q5/Q6 (chỉ cần bỏ file vào `ComfyUI/models/unet`, code tự chọn)

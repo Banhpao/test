@@ -9,6 +9,7 @@
 > - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — đã đổi gì, ngày nào
 > - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — lệnh khởi động, xử lý sự cố
 > - [`docs/TESTLOG.md`](docs/TESTLOG.md) — kết quả chạy thử trên các máy khác nhau
+> - [`docs/MAY.md`](docs/MAY.md) — máy đang dùng và giới hạn phần cứng (nơi duy nhất ghi điều này)
 
 > **Dự án anh em:** `../yume_assistant` — **Yume Assistant**, trợ lý kỹ thuật cá
 > nhân (RAG, tool calling, sau này ROS2/MQTT). Đó là **sản phẩm khác**, repo khác.
@@ -43,8 +44,8 @@ Video ngắn từ ảnh của chính persona là tính năng phụ, chỉ bật 
 ## 2. Bản đồ code
 
 ```
-formyhorny/
-├── AGENTS.md, CLAUDE.md, docs/     ← bộ nhớ dự án (file này)
+Paocake_ai/
+├── AGENTS.md, CLAUDE.md, docs/     ← bộ nhớ dự án (file này); máy đang dùng: docs/MAY.md
 ├── MO-PAOCAKE.cmd           bấm đúp để mở app: gọi project/khoi_dong.py (D23)
 └── project/
     ├── app_gradio.py        ~3800 dòng — UI Gradio + TOÀN BỘ pipeline ảnh
@@ -69,6 +70,7 @@ formyhorny/
     ├── test_bench_chat.py   test OFFLINE cho bench_chat (Ollama giả bằng httpx.MockTransport)
     ├── khoi_dong.py         mở app một cú bấm: Ollama (ổ rời, cổng 11435) + ComfyUI + main.py (D23)
     ├── test_khoi_dong.py    test OFFLINE cho khoi_dong (chọn Ollama, cờ ComfyUI theo VRAM, tắt đúng cái mình bật)
+    ├── test_auto_outfit.py  KHÔNG phải test tự động: công cụ thử tay đổi đồ, cần ComfyUI + Ollama + ảnh đầu vào
     ├── ComfyUI/             KHÔNG trong git — 93GB model, ~1.4GB custom_nodes
     └── yumeai/              ★ logic dùng chung — SỬA Ở ĐÂY, không copy sang nơi khác
         ├── core/
@@ -103,9 +105,12 @@ Chi tiết trong [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ```bash
 # 1) Ollama (chat, dịch, vision)        — BẮT BUỘC
+#    MO-PAOCAKE.cmd tự bật bản trên ổ rời ở cổng 11435; chạy tay bản đó: RUNBOOK "Khởi động bằng tay".
+#    Hoặc Ollama cài trên máy (cổng 11434, mặc định của OLLAMA_URL):
 ollama serve
 
 # 2) ComfyUI (mọi việc vẽ/sửa ảnh)      — BẮT BUỘC nếu muốn có ảnh
+#    --lowvram khi GPU dưới 10 GB VRAM — máy hiện tại cần (docs/MAY.md)
 cd project/ComfyUI && python main.py --lowvram
 
 # 3) một trong hai cửa vào
@@ -122,39 +127,41 @@ bộ phận vẽ. `app_gradio.py`/`main.py` chỉ dựng JSON workflow rồi POS
 
 ## 4. Trước khi sửa code — chạy test
 
-```bash
-cd project && python test_router.py
-cd project && python test_storage.py
-cd project && python test_chat_context.py
-cd project && python test_memory.py
-cd project && python test_api_storage.py
-cd project && python test_bench_baseline.py
+Chạy **mọi** file `project/test_*.py` (trừ `test_auto_outfit.py` — công cụ thử tay, xem bản đồ code).
+Không liệt kê tay ở đây: thêm file test mới là nó tự vào lệnh dưới.
+
+```powershell
+# Windows, ổ rời: chạy hết + khởi động thử ComfyUI, ghi nhật ký vào E:\duan\_vscode\nhat-ky\
+E:\duan\_vscode\KIEM-THU-DU-AN.cmd
+
+# Hoặc tay, trong project\ (PowerShell):
+Get-ChildItem test_*.py | Where-Object Name -ne test_auto_outfit.py | ForEach-Object { .\.venv\Scripts\python.exe $_.Name }
 ```
 
 Chạy **offline**, không cần Ollama hay ComfyUI (các test cần dịch vụ sẽ tự bỏ qua
 nếu dịch vụ đang chạy, và tự kiểm tra chiều ngược lại nếu không). Đây là lưới an
 toàn duy nhất của dự án — luôn chạy nó trước khi mở UI.
 
+`KIEM-THU-DU-AN.cmd` lấy danh sách test từ `PAOCAKE_TESTS` trong `E:\duan\_vscode\moi_truong.py`;
+`KIEM-TAI-LIEU.cmd` (cùng thư mục) cảnh báo khi có file test chưa nằm trong danh sách đó.
+
 ---
 
 ## 5. Ràng buộc phần cứng — ảnh hưởng đến mọi quyết định kỹ thuật
 
-| | |
-|---|---|
-| GPU | **AMD Radeon 680M — iGPU tích hợp**, không có VRAM riêng |
-| "VRAM" | 4GB cắt từ RAM hệ thống (UMA Frame Buffer, chỉnh trong BIOS) |
-| RAM | 16GB thực, hệ điều hành thấy ~12.4GB (4GB kia đã thành VRAM) |
+Máy đang dùng và giới hạn của nó ghi ở **một chỗ duy nhất: [`docs/MAY.md`](docs/MAY.md)**
+(hiện là laptop RTX 3050 4 GB VRAM rời, Ollama trên ổ rời cổng 11435). Đọc file đó trước khi
+quyết định gì về model, VRAM hay tốc độ; đừng chép thông số máy vào file này.
 
-Hệ quả bắt buộc phải nhớ:
+Điều không đổi theo máy:
 
-- **Không dùng SDXL.** `get_checkpoint_model()` lọc bỏ SDXL có chủ đích.
-- Flux Kontext chạy GGUF **Q3**, mất **~400 giây/ảnh**. `COMFY_TIMEOUT_SEC` = 1800s.
-- ComfyUI phải chạy `--lowvram`.
 - Chỉ **một job ComfyUI** cùng lúc (Resource Guard trong `runtime.py`).
-- Ollama chạy trên **RAM/CPU**, không đụng VRAM. Model chat nên ≤ 7B.
-- **Nâng RAM không làm ComfyUI nhanh hơn** — iGPU mới là nút thắt. Cần GPU rời.
-- **Không train LoRA được trên máy này** (cần ~8–12GB VRAM thật). Đây là rào cản
-  lớn nhất cho character consistency.
+- Ollama và ComfyUI dùng chung VRAM thì phải nhường nhau (D16) — đừng giả định cả hai cùng nằm
+  trên GPU.
+- **Không train LoRA** khi chưa có GPU ~8–12 GB VRAM thật. Đây là rào cản lớn nhất cho
+  character consistency.
+- Giới hạn trong code (lọc SDXL, `COMFY_TIMEOUT_SEC` = 1800s, `--lowvram`) được đặt cho máy yếu;
+  chỉ nới khi có số đo trên máy mạnh hơn ghi trong TESTLOG.
 
 ---
 

@@ -1,6 +1,6 @@
 # Lộ trình sản phẩm — YumeAI companion
 
-**Cập nhật:** 2026-08-21
+**Cập nhật:** 2026-10-27
 
 Mục tiêu là một AI companion local-first có nhân vật nhất quán, trò chuyện nhớ
 người dùng và gửi lại ảnh của chính nhân vật đó. Đây không phải lộ trình cho một
@@ -17,8 +17,9 @@ FastAPI ──┬── SQLite: user, conversation, message, memory, gallery
           └── ComfyUI: tạo và sửa ảnh (Resource Guard: một job mỗi lần)
 ```
 
-Giữ kiến trúc này vì nó chạy được trên Radeon 680M + khoảng 12 GiB RAM, không có
-chi phí API và dùng lại toàn bộ pipeline ảnh hiện có.
+Giữ kiến trúc này vì nó chạy được trên máy yếu (chọn từ thời máy cũ Radeon 680M + khoảng 12 GiB RAM;
+nay là laptop RTX 3050 4 GB — [`MAY.md`](MAY.md)), không có chi phí API và dùng lại toàn bộ
+pipeline ảnh hiện có.
 
 ## Đã hoàn thành — nền móng sản phẩm
 
@@ -49,19 +50,21 @@ chi phí API và dùng lại toàn bộ pipeline ảnh hiện có.
 1. Mỗi persona có ảnh gốc chuẩn, seed mặc định và preset IP-Adapter/ReActor riêng.
 2. Mọi entrypoint gọi chung pipeline trong `yumeai/pipelines/`; không để logic ảnh
    tiếp tục nằm trong khối Gradio 3.800 dòng.
-3. Thêm trang gallery dạng lưới, lọc theo persona/conversation, xem lại prompt và
-   nút tạo biến thể.
+3. ✅ (D19, 2026-10-22) Gallery dạng lưới trong `/app`: lọc theo nhân vật, xem chi tiết,
+   vẽ lại với lời tả cũ. API `GET /api/gallery` lọc được theo user/hội thoại.
 4. LoRA chỉ triển khai khi có GPU rời đủ VRAM và đã đo trên máy thật.
 
 ## P3 — từ app local sang bản beta an toàn
 
-1. Onboarding ghi rõ đây là nhân vật AI; age gate nếu bật nội dung 18+.
+1. ✅ (D20) Màn chào lần đầu ở `/app` ghi rõ đây là nhân vật AI và dữ liệu nằm ở đâu.
+   Age gate chỉ cần nếu bật nội dung 18+ — hiện không có.
 2. Nếu chỉ bind `127.0.0.1`, `user_id` local là đủ. Nếu mở LAN/Internet phải thêm
-   đăng nhập, hash mật khẩu, session, rate limit và bỏ CORS `*`.
+   đăng nhập, hash mật khẩu, session, rate limit. CORS `*` đã bỏ (2026-10-15).
 3. Chính sách consent: không nhận ảnh người thật khác nếu không có sự đồng ý; cấm
-   nội dung về trẻ vị thành niên; có xoá/export toàn bộ dữ liệu.
-4. Backup/restore DB + images, migration schema và test migration.
-5. Quan sát hiệu năng: lưu token/giây, thời gian load model, thời gian từng job ảnh.
+   nội dung về trẻ vị thành niên. ✅ (D20) Xoá ảnh, xoá hội thoại, xuất và xoá toàn bộ dữ liệu.
+4. ✅ (D21) Sao lưu/khôi phục DB + ảnh bằng `sao_luu.py`; test migration v1→v2→v3 đã có.
+   Còn thiếu: migration runner tuần tự (STATE, nợ kỹ thuật).
+5. ✅ (D22) Số đo thật mỗi lượt chat/ảnh vào `data/perf.jsonl`, xem bằng `GET /api/stats`.
 
 ## P4 — tính năng tăng giá trị, không phải điều kiện MVP
 
