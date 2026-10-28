@@ -162,16 +162,41 @@ def warmup_ollama():
         except Exception as e:
             print(f"⚠️ Warmup {m} lỗi (bỏ qua): {e}")
 
+def _persona_image_rules(persona: dict) -> str:
+    """Phần dặn thêm khi ảnh vẽ chính nhân vật. Tiếng Anh vì cả system prompt là tiếng Anh."""
+    rules = """
+
+THIS PICTURE SHOWS THE CHARACTER HERSELF:
+- The subject is ONE fictional young woman: write "1girl, solo". Words like "em", "co ay", "tao", "to" in the
+  request mean her. Never use a person's name as a tag (no "1pao", no names at all).
+- Her face, hair, eyes and body are added separately: do NOT describe them, describe only what she does and wears.
+- Make the action clearly visible: drawing or painting = pencil or brush touching the paper or canvas;
+  writing = pen on the page; reading = eyes on the open book."""
+    scene = str(persona.get("scene", "")).strip()
+    if scene:
+        rules += f"""
+- If the request does not name a place, set the scene in her usual place: {scene}.
+  If the request names a place, use the requested place instead."""
+    return rules
+
+
 def enrich_for_create(vi_text: str, style: str = "Anime") -> str:
     """Giữ chữ ký cũ. Cần biết thành/bại thì dùng enrich_for_create_ex."""
     return enrich_for_create_ex(vi_text, style)[0]
 
 
-def enrich_for_create_ex(vi_text: str, style: str = "Anime") -> tuple[str, bool]:
+def enrich_for_create_ex(vi_text: str, style: str = "Anime",
+                         persona: dict | None = None) -> tuple[str, bool]:
     """LLM 'LÀM GIÀU' prompt — học cách ChatGPT/Gemini mở rộng câu ngắn thành mô tả chi tiết (cho TẠO ảnh mới).
     Giữ ĐÚNG nội dung người dùng nêu (chủ thể, trang phục, bối cảnh), chỉ THÊM chi tiết bổ trợ:
     ngoại hình, biểu cảm, ánh sáng, không khí, bố cục/ống kính, từ khóa chất lượng.
-    Hỏng → tự lùi về dịch tag thường (translate_vi_en) → cuối cùng giữ nguyên câu gốc."""
+    Hỏng → tự lùi về dịch tag thường (translate_vi_en) → cuối cùng giữ nguyên câu gốc.
+
+    `persona`: nhân vật đang được vẽ (chỉ /app truyền; app_gradio.py không truyền nên
+    prompt của nó giữ nguyên). Có nhân vật thì dặn thêm: chủ thể là MỘT cô gái, không
+    viết tên làm tag, bối cảnh mặc định của nhân vật, hành động phải thấy rõ. Dùng thật
+    27/10 không có phần này: model viết tag `1pao` và bịa "Chinese ink art studio" cho
+    Pao học ở Tokyo (D27). Việc gỡ tên khỏi câu vào/ra nằm ở yumeai/core/image_prompt.py."""
     look = ("anime art style, clean line art, vibrant cel shading, soft anime lighting"
             if style != "Realistic"
             else "photorealistic, natural skin texture, realistic lighting, sharp focus")
@@ -194,6 +219,8 @@ Examples:
 "co gai toc bac dung duoi mua" -> 1girl, solo, long silver hair, detailed eyes, melancholic expression, standing in the rain, wet hair and clothes, city street at night, neon reflections on wet ground, soft rim lighting, cinematic atmosphere, depth of field, highly detailed
 "co gai toc vang mac bikini do tren bai bien" -> 1girl, solo, long blonde hair, blue eyes, gentle smile, red bikini, slim figure, standing on a sunny tropical beach, turquoise sea, golden hour sunlight, gentle wind, full body shot, shallow depth of field, vibrant colors, highly detailed
 "hai co gai ngoi uong tra trong quan cafe" -> 2girls, sitting at a wooden table, cozy cafe interior, holding teacups, warm relaxed expressions, casual outfits, soft window light, plants and bookshelves in background, shallow depth of field, warm color palette, highly detailed"""
+    if persona:
+        system += _persona_image_rules(persona)
     try:
         with httpx.Client(timeout=40) as c:
             r = c.post(f"{OLLAMA_URL}/api/chat", json={
@@ -222,16 +249,20 @@ Examples:
 
 
 
-def summarize_conversation(messages: list) -> str:
+def summarize_conversation(messages: list, persona_name: str = "") -> str:
     """Nén các lượt cũ thành vài gạch đầu dòng SỰ KIỆN để nhét vào system prompt.
 
     Đây là "trí nhớ dài" phiên bản rẻ tiền: thay vì giữ nguyên 50 lượt cũ (tràn
     context, model càng nhớ càng loạn), ta giữ lại phần cốt lõi dưới dạng fact.
+
+    `persona_name`: tên nhân vật. Không có nó, dùng thật 27/10 model ghi "Tên: Pao",
+    "Cách xưng hô: Pao - B-boys" — lẫn nhân vật với người dùng (D25).
     """
     if not messages:
         return ""
+    who = persona_name or "nhân vật"
     lines = [
-        f"{'Người dùng' if m.get('role') == 'user' else 'Nhân vật'}: {m.get('content', '')}"
+        f"{'NGƯỜI DÙNG' if m.get('role') == 'user' else f'{who} (nhân vật)'}: {m.get('content', '')}"
         for m in messages
     ]
     # Cắt từ ĐẦU chứ không cắt từ cuối. Bản cũ dùng [:6000] — giữ 6000 ký tự ĐẦU —
@@ -250,23 +281,40 @@ def summarize_conversation(messages: list) -> str:
         # Một message duy nhất mà dài hơn cả ngân sách: vẫn phải gửi phần cuối của nó.
         transcript = lines[-1][-6000:]
 
-    system = """Bạn là bộ nhớ của một nhân vật trong ứng dụng trò chuyện.
-Đọc đoạn hội thoại và rút ra những điều ĐÁNG NHỚ về người dùng và về mối quan hệ.
+    system = f"""Bạn là bộ nhớ của nhân vật {who} trong ứng dụng trò chuyện.
+Đoạn hội thoại có hai người: NGƯỜI DÙNG và {who} (nhân vật) — HAI NGƯỜI KHÁC NHAU.
+Rút ra những điều ĐÁNG NHỚ về NGƯỜI DÙNG và về mối quan hệ giữa hai người.
 
-CHỈ ghi những gì thực sự có trong hội thoại. TUYỆT ĐỐI không suy diễn, không bịa.
-Ưu tiên: tên, tuổi, nghề, nơi ở, sở thích, chuyện đang xảy ra trong đời họ,
-lời hứa đã trao đổi, chủ đề nhạy cảm cần tránh, cách xưng hô hai bên dùng.
+CHỈ ghi những gì NGƯỜI DÙNG thực sự nói. TUYỆT ĐỐI không suy diễn, không bịa.
+KHÔNG ghi tên, sở thích, công việc hay chuyện của {who} như thể đó là của người dùng.
+Ưu tiên: tên, nghề, nơi ở, sở thích, chuyện đang xảy ra trong đời họ,
+lời hứa đã trao đổi, chủ đề họ không muốn nhắc tới.
+Điều gì không biết thì BỎ QUA — không viết "chưa có", "không rõ".
 
-Xuất ra tối đa 8 gạch đầu dòng tiếng Việt, mỗi dòng một ý ngắn.
+Xuất ra tối đa 8 dòng tiếng Việt, mỗi dòng bắt đầu bằng "- " và một ý ngắn.
 Không mở đầu, không kết luận, không giải thích. Nếu không có gì đáng nhớ, trả về đúng chữ: (chưa có)"""
 
     out = _ollama_chat(get_translate_model(), system, transcript,
                        temperature=0.1, num_predict=300, timeout=60, retries=1)
-    out = (out or "").strip()
-    if not out or out.startswith("(chưa có"):
+    out = _clean_summary(out)
+    if not out:
         return ""
     print(f"🧠 Memory summary:\n{out}")
     return out
+
+
+# Dòng kiểu "Tuổi: Chưa có" — model vẫn hay điền mẫu dù đã dặn bỏ qua (27/10).
+_EMPTY_SUMMARY_LINE = re.compile(r":\s*\(?(chưa có|không rõ|không có|chưa biết|n/?a)\)?\.?\s*$", re.IGNORECASE)
+
+
+def _clean_summary(raw: str) -> str:
+    """Bỏ dòng rỗng nghĩa ("Tuổi: Chưa có") và câu "(chưa có)" của tóm tắt."""
+    text = (raw or "").strip()
+    if not text or text.startswith("(chưa có"):
+        return ""
+    kept = [line for line in text.splitlines()
+            if line.strip() and not _EMPTY_SUMMARY_LINE.search(line.strip())]
+    return "\n".join(kept).strip()
 
 
 # Model chat quá nhỏ thì không cách nào "thông minh" được, dù prompt có tốt đến đâu.

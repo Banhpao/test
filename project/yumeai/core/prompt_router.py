@@ -197,19 +197,39 @@ def _looks_like_style_edit(text: str) -> bool:
     return contains_any_word(t, ["phong cách", "style", "anime", "realistic", "semi"])
 
 
+# ── "vẽ" trong CÂU HỎI thường là hỏi chuyện, không phải lệnh vẽ ──
+# Dùng thật 27/10: "Pao đang vẽ gì vậy?" bị đem đi vẽ ảnh (Pao là sinh viên hội hoạ nên
+# hỏi chuyện vẽ là chuyện thường ngày). Câu hỏi có chữ "vẽ" chỉ là lệnh vẽ khi có dấu
+# hiệu NHỜ vẽ: "vẽ cho anh…", "vẽ em…", "…được không", "vẽ một bức…".
+_QUESTION_MARKERS = re.compile(
+    r"\?|(?<!\w)(gì|không|chưa|sao|à|hả|nhỉ|vậy|thế|thế nào|ra sao|bao giờ|khi nào|ở đâu|bao lâu)\W*$")
+_DRAW_REQUEST_MARKERS = re.compile(
+    r"(?<!\w)(vẽ|draw)\s+(cho|giúp|hộ|thử|lại|ngay|luôn|một|1|tấm|bức|cái|chân dung)(?!\w)"
+    r"|(?<!\w)vẽ\s+(anh|em|mình|tao|tớ|tôi|cậu|mày|bọn|tụi|chúng)(?!\w)"
+    r"|(?<!\w)(được không|nhé|nha|nhá|đi)\W*$"
+    r"|(?<!\w)(for me|me a|please|pls|can you|could you)(?!\w)")
+
+
+def _is_question_about_drawing(t: str) -> bool:
+    """Câu HỎI có chữ vẽ/draw nhưng không nhờ vẽ ("Pao đang vẽ gì vậy?") → trò chuyện."""
+    return bool(_QUESTION_MARKERS.search(t)) and not _DRAW_REQUEST_MARKERS.search(t)
+
+
 def looks_like_create(text: str) -> tuple[bool, str]:
     """
     Có phải yêu cầu TẠO ẢNH không? Trả về (kết quả, lý do).
 
     Chặt hơn bản cũ: chỉ riêng động từ "tạo"/"làm" KHÔNG đủ — "tạo động lực cho anh đi"
     không phải lệnh vẽ. Phải là một trong:
-      - "vẽ" (tự nó đã là tạo ảnh)
+      - "vẽ" (tự nó đã là tạo ảnh) — trừ câu HỎI không nhờ vẽ ("đang vẽ gì vậy?")
       - động từ tạo + danh từ ảnh  ("tạo ảnh", "chụp cho anh tấm hình")
       - cụm xin ảnh                ("gửi ảnh đi", "cho anh xem hình")
     """
     t = normalize_text(text)
 
     if contains_word(t, "vẽ") or contains_word(t, "draw"):
+        if _is_question_about_drawing(t):
+            return False, ""
         return True, "draw_verb"
 
     if contains_any_word(t, SHOW_IMAGE_HINTS):

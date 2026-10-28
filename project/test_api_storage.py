@@ -283,6 +283,8 @@ class ApiStorageTests(unittest.TestCase):
 
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(listed.json()["facts"][0]["fact_value"], "cà phê đen")
+        # Nhãn tiếng Việt cho bảng ký ức (D25) — UI không còn in khoá tiếng Anh.
+        self.assertEqual(listed.json()["labels"]["favorite_food_drink"], "Món / đồ uống yêu thích")
         self.assertEqual(deleted.json()["deleted"], True)
 
 

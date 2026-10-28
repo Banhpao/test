@@ -228,6 +228,10 @@ body.panel-closed .screen-chat .panel{display:none}
 .send:disabled{background:var(--rose-soft);color:var(--text3)}
 .composer .icon-btn.soft{width:48px;height:48px;flex-basis:48px;border-radius:14px}
 .hint{margin:0;font-size:13px;color:var(--text2);text-align:center}
+.hint.busy{color:var(--text)}
+.hint.flash{font-weight:700;animation:hint-flash .9s ease-out}
+@keyframes hint-flash{0%{opacity:.35}100%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.hint.flash{animation:none}}
 
 /* ── Bảng hồ sơ & ký ức ─────────────────────────── */
 .panel{background:var(--side);border-left:1px solid var(--line-soft);padding:28px 24px;display:flex;flex-direction:column;gap:24px;min-height:0;overflow-y:auto;height:100dvh}
@@ -483,7 +487,7 @@ dialog.modal::backdrop{background:rgba(9,6,18,.78)}
             <textarea id="chat-input" rows="1" placeholder="Nhắn..." autocomplete="off"></textarea>
             <button type="submit" class="send" id="send-btn" aria-label="Gửi"><i data-icon="send" data-size="22"></i></button>
           </form>
-          <p class="hint">Enter để gửi · Shift + Enter để xuống dòng · nhắn “vẽ …” để nhân vật vẽ ảnh</p>
+          <p class="hint" id="composer-hint" aria-live="polite">Enter để gửi · Shift + Enter để xuống dòng · nhắn “vẽ …” để nhân vật vẽ ảnh</p>
         </div>
       </div>
 
@@ -1147,7 +1151,7 @@ function messageNode(msg) {
     if (!data || !data.image_url) return h('p', { class: 'note note-error', text: 'Một ảnh cũ có dữ liệu không hợp lệ.' })
     return h('div', { class: 'msg' },
       avatar(S.personaId, 'sm'),
-      h('div', { class: 'stack' }, imageFigure(data.image_url, data.prompt || 'Ảnh đã vẽ'), h('span', { class: 'time', text: timeLabel(msg.created_at) })))
+      h('div', { class: 'stack' }, imageFigure(data.image_url, data.prompt || 'Ảnh đã vẽ', data.prompt ? `Bạn xin: “${data.prompt}”` : 'Ảnh đã vẽ'), h('span', { class: 'time', text: timeLabel(msg.created_at) })))
   }
   return textMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content, msg.created_at)
 }
@@ -1158,7 +1162,9 @@ function textMessage(role, text, time) {
   return h('div', { class: 'msg' }, avatar(S.personaId, 'sm'), h('div', { class: 'stack' }, bubble, h('span', { class: 'time', text: timeLabel(time) })))
 }
 
-function imageFigure(imageUrl, prompt) {
+/** `label`: dòng chú thích dưới ảnh (mặc định là prompt). Ảnh trong hội thoại ghi rõ
+ *  đó là câu người dùng xin, câu của nhân vật nằm ở bong bóng phía trên (D27). */
+function imageFigure(imageUrl, prompt, label = prompt) {
   const src = url(imageUrl)
   const img = h('img', { src, alt: prompt, loading: 'lazy' })
   img.addEventListener('error', () => { img.replaceWith(h('span', { class: 'note note-error', style: 'display:block;margin:12px', text: 'Không hiển thị được ảnh (file có thể đã bị xoá).' })) })
@@ -1166,7 +1172,7 @@ function imageFigure(imageUrl, prompt) {
   return h('figure', { class: 'shot' },
     h('button', { type: 'button', class: 'shot-open', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, prompt) }, img),
     h('figcaption', null,
-      h('span', { text: prompt }),
+      h('span', { text: label }),
       h('span', { style: 'display:flex;gap:2px;flex:0 0 auto' },
         h('a', { class: 'icon-btn', href: src, download: '', 'aria-label': 'Tải ảnh xuống' }, icon('download', 18)),
         h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Xem ảnh lớn', onclick: () => openLightbox(src, prompt) }, icon('expand', 18)))))
@@ -1197,10 +1203,27 @@ function renderSuggests() {
   }
 }
 
+const COMPOSER_HINT = 'Enter để gửi · Shift + Enter để xuống dòng · nhắn “vẽ …” để nhân vật vẽ ảnh'
+
 function updateComposer() {
   const disabled = S.busy || !S.conversationId || S.health.backend === false || (S.health.backend && !S.health.ollama)
   $('#send-btn').disabled = disabled
   for (const b of document.querySelectorAll('#suggests button')) b.disabled = disabled
+  // Đang bận thì Enter không gửi được — nói rõ thay vì im lặng (lỗi 2 ngày 27/10).
+  const hint = $('#composer-hint')
+  hint.classList.toggle('busy', S.busy)
+  if (!S.busy) hint.classList.remove('flash')
+  hint.textContent = S.busy
+    ? `${nameOf(S.personaId)} đang ${S.drawing ? 'vẽ' : 'trả lời'} — đợi xong rồi nhấn Enter để gửi. Chữ bạn gõ vẫn được giữ.`
+    : COMPOSER_HINT
+}
+
+/** Nhấn Enter lúc đang bận: nháy dòng gợi ý để người dùng thấy vì sao chưa gửi. */
+function flashComposerHint() {
+  const hint = $('#composer-hint')
+  hint.classList.remove('flash')
+  void hint.offsetWidth   // chạy lại animation
+  hint.classList.add('flash')
 }
 
 function autosize(el) {
@@ -1209,7 +1232,7 @@ function autosize(el) {
 }
 
 async function send(text) {
-  if (S.busy) return
+  if (S.busy) { flashComposerHint(); return }
   const input = $('#chat-input')
   const message = String(text ?? input.value).trim()
   if (!message) return
@@ -1299,6 +1322,7 @@ async function streamReply({ message, sentAt, conversationId, personaId, typing,
       S.messages.push({ role: 'assistant', content: reply, content_type: 'text', created_at: new Date().toISOString() })
     }
     fetchConversations().catch(() => {})
+    scheduleMemoryRefresh(personaId)
   } catch (e) {
     typing.remove()
     if (bubble && !reply) bubble.closest('.msg').remove()
@@ -1337,6 +1361,7 @@ async function drawInChat({ message, sentAt, conversationId, personaId, style, r
   S.drawLabel = `${name} · ${styleLabel(style)}`
   elapsed.textContent = elapsedLine()
   renderStatus()
+  updateComposer()   // dòng gợi ý đổi sang "đang vẽ"
   scrollToBottom()   // dòng thông báo "đang vẽ" vừa hiện làm khung tin nhắn ngắn lại
   const timer = setInterval(() => { elapsed.textContent = elapsedLine() }, 1000)
   try {
@@ -1358,6 +1383,12 @@ async function drawInChat({ message, sentAt, conversationId, personaId, style, r
     card.remove()
     if (S.conversationId === conversationId) {
       S.messages.push({ role: 'user', content: message, content_type: 'text', created_at: sentAt })
+      // Câu nhân vật nói kèm ảnh — máy chủ đã lưu thành lượt chữ ngay trước ảnh (D27).
+      if (data.caption) {
+        const captionMessage = { role: 'assistant', content: data.caption, content_type: 'text', created_at: new Date().toISOString() }
+        S.messages.push(captionMessage)
+        appendToLog(messageNode(captionMessage))
+      }
       const imageMessage = {
         role: 'assistant', content_type: 'image', created_at: new Date().toISOString(),
         content: JSON.stringify({ image_id: data.image_id, image_url: data.image_url, prompt: message }),
@@ -1369,6 +1400,7 @@ async function drawInChat({ message, sentAt, conversationId, personaId, style, r
     loadGallery().then(() => { if (S.personaId === personaId) renderProfile() })
     fetchConversations().catch(() => {})
     loadStats()
+    scheduleMemoryRefresh(personaId)
   } catch (e) {
     card.remove()
     addError(e.status === 429
@@ -1407,6 +1439,27 @@ function renderProfile() {
 }
 
 // ── Ký ức ──────────────────────────────────
+// Máy chủ trích fact NGẦM sau khi trả lời xong (chạy vài giây tới cả phút), nên bảng
+// ký ức tự tải lại vài lần sau mỗi lượt. Trước đây chỉ tải khi đổi nhân vật nên fact
+// mới không hiện tới khi tải lại trang (lỗi 3 ngày 27/10).
+const MEMORY_REFRESH_DELAYS_MS = [8000, 30000, 75000]
+let memoryRefreshTimers = []
+
+function scheduleMemoryRefresh(personaId) {
+  for (const t of memoryRefreshTimers) clearTimeout(t)
+  memoryRefreshTimers = MEMORY_REFRESH_DELAYS_MS.map((ms) => setTimeout(() => {
+    if (S.personaId !== personaId) return
+    // Đang sửa / thêm / xác nhận xoá thì đừng vẽ lại bảng dưới tay người dùng.
+    if (S.editingKey || S.confirmKey || S.adding) return
+    loadMemory()
+  }, ms))
+}
+
+function factLabel(key) {
+  const labels = (S.memoryInfo && S.memoryInfo.labels) || {}
+  return labels[key] || capFirst(String(key).replaceAll('_', ' '))
+}
+
 async function loadMemory() {
   const personaId = S.personaId
   if (!personaId) return
@@ -1433,7 +1486,7 @@ function renderMemory() {
   else if (!S.facts.length && p) list.append(h('li', null, h('p', { class: 'small-note', text: `${p.name} chưa ghi nhớ điều gì về bạn. Cứ trò chuyện, hoặc tự thêm bên dưới.` })))
 
   for (const fact of S.facts) {
-    const label = fact.fact_key.replaceAll('_', ' ')
+    const label = factLabel(fact.fact_key)
     if (S.editingKey === fact.fact_key) {
       const input = h('input', { class: 'input', id: 'fact-edit-input', value: fact.fact_value, 'aria-label': `Nội dung: ${label}` })
       const form = h('form', { class: 'fact-form', onsubmit: (e) => { e.preventDefault(); saveFact(fact.fact_key, input.value) } },

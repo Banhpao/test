@@ -100,16 +100,12 @@ class MemoryTests(unittest.TestCase):
         result = parse_memory_response(raw)
 
         self.assertTrue(result.success)
+        # Khoá quen thuộc quy về khoá chuẩn; khoá ngoài FACT_KEYS bị bỏ (D25).
         self.assertEqual(result.facts, [
             {
-                "key": "favorite_drink",
+                "key": "favorite_food_drink",
                 "value": "cà phê đen",
                 "confidence": 1.0,
-            },
-            {
-                "key": "shopping_preference",
-                "value": "mua sách cũ",
-                "confidence": 0.8,
             },
         ])
 
@@ -161,7 +157,7 @@ class MemoryTests(unittest.TestCase):
         self.assertNotIn("câu 0 ", transcript)
         # Không có dòng nào bị cắt giữa chừng.
         for line in transcript.splitlines():
-            self.assertTrue(line.startswith("user: câu ") and line.endswith("x" * 90))
+            self.assertTrue(line.startswith("NGƯỜI DÙNG: câu ") and line.endswith("x" * 90))
 
     def test_extraction_request_matches_chat_context_and_has_room_for_json(self):
         """num_ctx khác chat là Ollama nạp lại model; 320 token thì JSON bị cắt cụt."""
@@ -244,6 +240,137 @@ class MemoryTests(unittest.TestCase):
     def test_invalid_json_is_flagged_as_parse_failure(self):
         self.assertTrue(parse_memory_response("không phải json").parse_failed)
         self.assertTrue(parse_memory_response('{"x": 1}').parse_failed)
+
+
+# Lời người dùng thật trong lần dùng thử 27/10 (TESTLOG) — người dùng giả "Tuấn" nói với Pao.
+TUAN_LINES = [
+    "Chào Pao, mình là Tuấn, kỹ sư điện tử ở Đà Nẵng.",
+    "Hôm nay mình mệt quá, sửa mạch cả ngày mà vẫn lỗi.",
+    "Mình thích nhất là cà phê sữa đá, ngày nào cũng uống.",
+    "À, mình có nuôi một con chó tên là Bơ.",
+    "Pao đang vẽ gì vậy?",
+    "Tối nay Tokyo có mưa không? Pao có hay ra ngoài vẽ ký hoạ buổi tối không?",
+    "Nói thật đi, Pao là AI đúng không?",
+    "Liệt kê giúp mình 5 mẹo để ngủ ngon đi.",
+    "What's your favorite painting?",
+    "Kể mình nghe chuyện con mèo hoang gần trường đi.",
+    "Mai mình phải đi công tác Sài Gòn rồi, chắc vắng vài hôm.",
+    "Pao còn nhớ mình tên gì, làm nghề gì, ở đâu không?",
+    "Thế mình thích uống gì, với nuôi con gì tên là gì?",
+    "Thôi mình đi ngủ đây, chúc Pao ngủ ngon nhé.",
+]
+
+
+def _facts_json(items):
+    return json.dumps({"facts": [
+        {"key": k, "value": v, "confidence": 0.9, **({"evidence": e} if e else {})}
+        for k, v, e in items
+    ]}, ensure_ascii=False)
+
+
+class FactGroundingTests(unittest.TestCase):
+    """D25: chỉ giữ fact dựng được từ lời NGƯỜI DÙNG, không phải chuyện của nhân vật."""
+
+    def test_the_seven_wrong_facts_from_27_10_are_dropped(self):
+        # Đúng 13 fact Pao đã lưu ngày 27/10 (khoá cũ tự do): 7 sai, 6 đúng về người dùng.
+        wrong = [
+            ("interest", "vẽ mưa đêm và mèo hoang ở trường", ""),
+            ("dislike", "nói về con mèo hoang", ""),
+            ("goal", "hoàn thành bài vẽ deadline", ""),
+            ("honorific", "Pao", ""),
+            ("boundary", "không muốn nhắc đến việc nuôi chó hoặc mèo", ""),
+            ("event", "mưa to tại Tokyo tối nay", ""),
+            ("relationship_style", "gọi người bằng Pao, dùng từ B-boys", ""),
+        ]
+        for item in wrong:
+            result = parse_memory_response(_facts_json([item]), TUAN_LINES, "Pao")
+            self.assertTrue(result.success)
+            self.assertEqual(result.facts, [], f"phải bỏ fact sai: {item[0]} = {item[1]}")
+
+    def test_true_facts_about_the_user_are_kept(self):
+        result = parse_memory_response(_facts_json([
+            ("name", "Tuấn", "mình là Tuấn"),
+            ("occupation", "kỹ sư điện tử", "mình là Tuấn, kỹ sư điện tử ở Đà Nẵng"),
+            ("home_city", "Đà Nẵng", ""),
+            ("pet", "nuôi chó tên Bơ", "À, mình có nuôi một con chó tên là Bơ."),
+            ("favorite_food_drink", "cà phê sữa đá", "Mình thích nhất là cà phê sữa đá"),
+            ("current_event", "sắp đi công tác Sài Gòn vài hôm", "Mai mình phải đi công tác Sài Gòn rồi"),
+        ]), TUAN_LINES, "Pao")
+        self.assertEqual(
+            [f["key"] for f in result.facts],
+            ["name", "occupation", "home_city", "pet", "favorite_food_drink", "current_event"],
+        )
+
+    def test_evidence_must_be_a_user_statement(self):
+        # Bằng chứng bịa, hoặc chép từ câu hỏi của người dùng, đều không được tính.
+        for evidence in ("Tao chỉ uống cà phê đen không đường", "Tối nay Tokyo có mưa không?"):
+            result = parse_memory_response(
+                _facts_json([("favorite_food_drink", "cà phê sữa đá", evidence)]), TUAN_LINES, "Pao")
+            self.assertEqual(result.facts, [], evidence)
+
+    def test_questions_and_requests_are_not_statements(self):
+        self.assertTrue(memory_service._is_question("Pao đang vẽ gì vậy?"))
+        self.assertTrue(memory_service._is_question("Pao còn nhớ mình tên gì, làm nghề gì, ở đâu không"))
+        self.assertTrue(memory_service._is_request("Kể mình nghe chuyện con mèo hoang gần trường đi."))
+        self.assertTrue(memory_service._is_request("Liệt kê giúp mình 5 mẹo để ngủ ngon đi."))
+        for statement in ("Mai mình phải đi công tác Sài Gòn rồi, chắc vắng vài hôm.",
+                          "Làm kỹ sư được 3 năm rồi.", "Đọc sách là sở thích của mình.",
+                          "Thôi mình đi ngủ đây, chúc Pao ngủ ngon nhé."):
+            self.assertFalse(memory_service._is_question(statement), statement)
+            self.assertFalse(memory_service._is_request(statement), statement)
+
+    def test_without_user_lines_parser_only_checks_keys(self):
+        # Gọi parser không kèm lời người dùng (API cũ) vẫn chạy như trước, chỉ thêm lọc khoá.
+        result = parse_memory_response(_facts_json([("hobby", "đọc sách", ""), ("mood", "vui", "")]))
+        self.assertEqual(result.facts, [{"key": "likes", "value": "đọc sách", "confidence": 0.9}])
+
+    def test_request_schema_limits_keys_and_asks_for_evidence(self):
+        _FakeClient.payloads = []
+        with patch.object(memory_service.httpx, "Client", _FakeClient):
+            extract_memory_facts([{"role": "user", "content": "mình tên Tuấn"}], "Pao")
+        payload = _FakeClient.payloads[-1]
+        item = payload["format"]["properties"]["facts"]["items"]
+        self.assertEqual(item["properties"]["key"]["enum"], list(memory_service.FACT_KEYS))
+        self.assertIn("evidence", item["required"])
+        self.assertIn("Pao", payload["messages"][0]["content"])
+
+    def test_transcript_names_both_speakers(self):
+        transcript = build_memory_transcript([
+            {"role": "user", "content": "mình thích trà sữa"},
+            {"role": "assistant", "content": "Tao uống cà phê đen."},
+        ], budget_chars=1000, persona_name="Pao")
+        self.assertEqual(transcript.splitlines(), [
+            "NGƯỜI DÙNG: mình thích trà sữa",
+            "Pao (nhân vật): Tao uống cà phê đen.",
+        ])
+
+    def test_memory_context_uses_vietnamese_labels(self):
+        context = format_memory_context([
+            {"fact_key": "pet", "fact_value": "chó tên Bơ"},
+            {"fact_key": "tu_dat", "fact_value": "khoá người dùng tự đặt"},
+        ])
+        self.assertEqual(context.splitlines(), ["- Thú cưng: chó tên Bơ", "- tu_dat: khoá người dùng tự đặt"])
+
+
+class SummaryPromptTests(unittest.TestCase):
+    def test_summary_names_the_character_and_drops_empty_lines(self):
+        from yumeai.services import ollama_service
+        sent = {}
+
+        def fake_chat(model, system, user, **kwargs):
+            sent.update(system=system, user=user)
+            return "- Tên: Tuấn\n- Tuổi: Chưa có\n- Nghề: kỹ sư điện tử\n- Lời hứa: (không rõ)"
+
+        with patch.object(ollama_service, "_ollama_chat", fake_chat), \
+                patch.object(ollama_service, "get_translate_model", return_value="m"):
+            out = ollama_service.summarize_conversation([
+                {"role": "user", "content": "mình là Tuấn"},
+                {"role": "assistant", "content": "Tao là Pao."},
+            ], "Pao")
+        self.assertIn("Pao (nhân vật): Tao là Pao.", sent["user"])
+        self.assertIn("NGƯỜI DÙNG: mình là Tuấn", sent["user"])
+        self.assertIn("KHÔNG ghi tên, sở thích, công việc hay chuyện của Pao", sent["system"])
+        self.assertEqual(out, "- Tên: Tuấn\n- Nghề: kỹ sư điện tử")
 
 
 if __name__ == "__main__":

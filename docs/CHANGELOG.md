@@ -17,6 +17,13 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 - PRODUCT_ROADMAP đánh dấu đã làm: P2.3 (D19), P3.1 và P3.3 (D20), P3.4 (D21), P3.5 (D22). STATE: thêm lần kiểm thử Windows 26/10 (15/15 đạt), chuyển mục Wan 2.2 vào bảng nợ kỹ thuật.
 - Nhánh `review-fixes` đã commit (`ff6dade`) và đẩy lên GitHub `Banhpao/test` — commit đầu tiên kể từ 21/8.
 - Dùng thật lần đầu qua `/app` (19 lượt chat + 2 ảnh SD1.5 — lần đầu vẽ thật trên RTX 3050): kết quả và 6 lỗi tìm thấy ghi ở TESTLOG 27/10; STATE thêm "Trích fact lẫn nhân vật với người dùng" vào bảng chặn hướng sản phẩm; MAY.md ghi số đo ảnh. Không đổi mã.
+- Sửa 6 lỗi của lượt dùng thật 27/10 (chưa chạy lại trên máy):
+  - Trí nhớ (D25): bản ghi gửi model gọi rõ `NGƯỜI DÙNG` / `<tên> (nhân vật)`; bộ khoá fact cố định `FACT_KEYS` có nhãn tiếng Việt, khoá quen thuộc quy về khoá chuẩn; mỗi fact phải có `evidence` và khớp một câu khẳng định của người dùng (câu hỏi, câu nhờ vả không tính; giá trị chứa tên nhân vật bị bỏ). Tóm tắt hội thoại biết tên nhân vật và bỏ dòng "Chưa có". Trên dữ liệu 27/10: 7 fact sai bị bỏ, fact đúng giữ nguyên.
+  - Định tuyến (D26): câu hỏi có chữ "vẽ" ("Pao đang vẽ gì vậy?") là trò chuyện; "vẽ cho anh… được không?" vẫn là xin ảnh.
+  - `/app`: đang trả lời / đang vẽ thì dòng gợi ý dưới ô chat nói rõ và nháy khi nhấn Enter, chữ gõ vẫn giữ; bảng "… nhớ về bạn" tự tải lại 8 s, 30 s, 75 s sau mỗi lượt (bỏ qua khi đang sửa) và hiện nhãn tiếng Việt từ `labels` mới của `/api/memory`.
+  - Pao (D27): few-shot "B-baka!" → "Baka!", lời chào bỏ "H-hừ"; chỉ chêm Baka/Urusai/Mou, cấm tiếng Anh, từ bịa, nói lắp, xưng "mình"/"tôi".
+  - Ảnh nhân vật (D27): persona thêm `scene` và `image_lines`; tên nhân vật bị gỡ khỏi câu đưa đi dịch và khỏi prompt ra (`1pao` → `1girl`); `enrich_for_create_ex(..., persona)` dặn một cô gái, bối cảnh quen thuộc, hành động thấy rõ (Gradio không truyền nên giữ nguyên). Ảnh xin trong khung chat có câu của nhân vật lưu thành lượt chữ ngay trước ảnh, response có `caption`; chú thích dưới ảnh ghi "Bạn xin: …".
+  - Test: `test_memory.py` 20, `test_chat_context.py` 16, `test_router.py` thêm mục 3b và 16, `test_chat_image_route.py` thêm 3, `test_api_storage.py` kiểm `labels`.
 
 ---
 

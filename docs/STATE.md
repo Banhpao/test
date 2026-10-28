@@ -123,7 +123,7 @@ LLM từ không giới hạn → tối đa 40 message.
 
 | Vấn đề | Chi tiết |
 |---|---|
-| **Trích fact lẫn nhân vật với người dùng** | Dùng thật 27/10 (TESTLOG): Pao lưu 13 fact, chỉ 6 đúng về người dùng; 7 là chuyện của chính Pao hoặc suy diễn sai, có `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó; thiếu con chó. Fact sai được đưa lại vào prompt. Tóm tắt hội thoại cũng lẫn ("Tên: Pao"). Hỏng trụ 2 — sửa trước khi đánh giá memory tiếp. |
+| **Trích fact lẫn nhân vật với người dùng** | **Đã sửa trong code 27/10 (D25), chờ chạy lại kịch bản "Tuấn" trên máy để xác nhận.** Dùng thật 27/10 (TESTLOG): Pao lưu 13 fact, chỉ 6 đúng về người dùng; 7 là chuyện của chính Pao hoặc suy diễn sai, có `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó; thiếu con chó. Fact sai được đưa lại vào prompt. Tóm tắt hội thoại cũng lẫn ("Tên: Pao"). Hỏng trụ 2 — sửa trước khi đánh giá memory tiếp. |
 | **Chưa có relevance retrieval** | Fact extraction đã chạy, nhưng hiện đưa tối đa 24 fact gần nhất vào prompt. Chỉ cần FTS5/embedding khi dữ liệu thực tế đủ lớn để benchmark. |
 | **Character consistency chưa đủ** | Appearance tag chưa khoá được đúng một khuôn mặt. Cần ảnh gốc + seed/preset IP-Adapter trước; LoRA cần GPU rời. |
 | **Chưa có authentication** | Dữ liệu phân tách bằng `user_id`, nhưng đây chưa phải đăng nhập. An toàn khi chỉ bind localhost; không được mở Internet như hiện tại. |
@@ -159,8 +159,9 @@ Chạy tối thiểu 20–30 lượt thật với model local để đo tỷ l�
 thời gian background extraction và tác động RAM. Chỉ thêm FTS5/embedding nếu 24
 fact gần nhất làm prompt nhiễu hoặc bỏ sót fact liên quan.
 
-Lượt đầu đã chạy 27/10 (19 lượt chat, TESTLOG): Pao 6/13 fact đúng, Su 5/7. Việc kế tiếp là sửa prompt trích fact (chỉ điều
-về người dùng, bộ khoá cố định) rồi chạy lại đúng kịch bản đó để so.
+Lượt đầu đã chạy 27/10 (19 lượt chat, TESTLOG): Pao 6/13 fact đúng, Su 5/7. Đã sửa cùng ngày: trích fact chỉ giữ điều
+người dùng tự nói, bộ khoá cố định, tóm tắt gọi đúng tên hai người (D25); kèm 5 lỗi còn lại của lượt đó (D26, D27, `/app`).
+Việc kế tiếp: chạy lại đúng kịch bản đó trên DB trước lượt thử (`paocake-data-truoc-thu-app-2026-10-27.zip`) để so.
 
 ### 2. Character consistency khả thi trên máy hiện tại
 

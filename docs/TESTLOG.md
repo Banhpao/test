@@ -50,7 +50,7 @@ Mục mới nhất ở **trên cùng**.
    Tokyo). Ảnh Pao cầm cọ đưa lên miệng chứ không đang vẽ; ảnh Su không thấy đang viết. Ảnh gửi vào hội thoại không kèm
    câu nào của nhân vật — chú thích là chính câu xin của người dùng.
 
-**Kết luận / cần đổi gì trong code** (chưa sửa — chờ chủ dự án chọn)
+**Kết luận / cần đổi gì trong code** (đã sửa trong code cùng ngày — DECISIONS D25, D26, D27 và `/app`; chưa chạy lại kịch bản này)
 - Ưu tiên cao nhất là lỗi 4: hỏng đúng trụ 2 "trò chuyện có trí nhớ". Prompt trích fact phải chỉ lấy điều **về người dùng**,
   giới hạn bộ khoá, và không lưu suy diễn kiểu `boundary`. Fact sai đang được đưa ngược vào prompt nên có thể làm nhân vật
   "quên" con chó.

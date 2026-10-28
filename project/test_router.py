@@ -7,6 +7,7 @@ Test router + lịch sử chat — CHẠY OFFLINE, không cần Ollama hay Comfy
 chạy lại file này trước khi mở UI. Trước đây dự án không có test nào nên các lỗi
 kiểu `"hi" in "khi nào"` chỉ lộ ra khi đang dùng thật.
 """
+import re
 import sys
 
 from yumeai.core.prompt_router import (
@@ -96,6 +97,31 @@ CREATE_CASES = [
 for t in CREATE_CASES:
     plan = rule_plan_request(t, has_image=False)
     check(f"text2img: {t!r}", plan.task, "text2img")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+section("3b. Câu HỎI có chữ 'vẽ' là trò chuyện, trừ khi có lời nhờ vẽ (dùng thật 27/10)")
+# ══════════════════════════════════════════════════════════════════════════
+# Bug: "Pao đang vẽ gì vậy?" bị đem đi vẽ ảnh — Pao là sinh viên hội hoạ, hỏi chuyện vẽ là thường.
+for t in [
+    "Pao đang vẽ gì vậy?",
+    "Pao đang vẽ gì vậy",
+    "em vẽ gì thế",
+    "Tối nay Tokyo có mưa không? Pao có hay ra ngoài vẽ ký hoạ buổi tối không?",
+    "em vẽ xong bài deadline chưa?",
+    "Pao thích vẽ tranh gì nhất?",
+    "what do you usually draw?",
+]:
+    check(f"chat (hỏi chuyện vẽ): {t!r}", rule_plan_request(t, has_image=False).task, "chat")
+for t in [
+    "Em vẽ cho anh được không?",
+    "em có thể vẽ anh không?",
+    "Vẽ em đang ngồi bên cửa sổ được không?",
+    "vẽ gì cho anh xem đi?",
+    "Vẽ cho anh một bức em đang ngồi viết bên cửa sổ lúc mưa phùn nhé.",
+    "can you draw me a cat?",
+]:
+    check(f"text2img (hỏi mà nhờ vẽ): {t!r}", rule_plan_request(t, has_image=False).task, "text2img")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -511,6 +537,46 @@ with _patch.object(_config, "OLLAMA_NUM_GPU", 0):
         _router._llm_plan_request("em có ảnh nào đẹp không", False, False)
     check("num_gpu đi kèm MỌI lời gọi (khác nhau là Ollama nạp lại model)",
           [c[2]["options"].get("num_gpu") for c in _FakeClient.calls], [0, 0])
+
+# ══════════════════════════════════════════════════════════════════════════
+section("16. Ảnh vẽ chính nhân vật (D27)")
+# ══════════════════════════════════════════════════════════════════════════
+from yumeai.core.image_prompt import image_caption, persona_neutral_text, scrub_persona_name
+
+for pid, p in PERSONAS.items():
+    check(f"persona {pid!r} có bối cảnh quen thuộc (tiếng Anh)", bool(p.get("scene", "").strip()), True)
+    check(f"persona {pid!r} có ≥3 câu nói kèm ảnh", len(p.get("image_lines") or []) >= 3, True)
+pao_lines = PERSONAS["pao"]["image_lines"]
+check("câu kèm ảnh của Pao không xưng 'mình'/'tôi'",
+      [l for l in pao_lines if re.search(r"(?<!\w)(mình|tôi)(?!\w)", l, re.IGNORECASE)], [])
+check("câu kèm ảnh chọn theo seed, ổn định", image_caption(pao, 7), pao_lines[7 % len(pao_lines)])
+check("không có image_lines → không có câu", image_caption({"name": "X"}, 3), "")
+
+check("gỡ tên khỏi câu đưa đi dịch", persona_neutral_text("vẽ Pao đang ngồi vẽ", pao), "vẽ cô ấy đang ngồi vẽ")
+check("gỡ tên không phân biệt hoa thường", persona_neutral_text("pao ơi vẽ đi", pao), "cô ấy ơi vẽ đi")
+check("không có nhân vật → giữ nguyên câu", persona_neutral_text("vẽ Pao", None), "vẽ Pao")
+check("1pao → 1girl, bỏ tên và Pao's",
+      scrub_persona_name("1pao, solo, Pao painting, Pao's sketchbook, studio", pao),
+      "1girl, solo, painting, sketchbook, studio")
+check("không đụng chữ chỉ CHỨA tên (sushi, Super)",
+      scrub_persona_name("1girl, sushi, Super light", PERSONAS["su"]), "1girl, sushi, Super light")
+
+# Pao: không còn mẫu nói lắp "B-baka" (model nhỏ méo thành "B-boys" ở 9/13 câu, 27/10).
+# Chỉ soi câu MẪU (lời chào + few-shot) — speech_style có nhắc 'B-b...' chính là để cấm.
+_pao_text = " ".join([pao["greeting"]] + [r for _, r in pao["examples"]])
+check("câu mẫu của Pao không còn kiểu nói lắp 'B-b...' / 'H-h...'",
+      re.findall(r"(?<!\w)[^\W\d]-[^\W\d]", _pao_text), [])
+check("speech_style của Pao cấm xưng 'mình'", "'mình'" in pao["speech_style"], True)
+
+with _fake_http({"/api/chat": _FakeResp({"message": {"content": "1pao, solo, painting at an easel"}})}):
+    _en, _ok = ollama_service.enrich_for_create_ex("vẽ cô ấy đang vẽ", "Anime", pao)
+    _sys_persona = _FakeClient.calls[-1][2]["messages"][0]["content"]
+    ollama_service.enrich_for_create_ex("vẽ cô ấy đang vẽ", "Anime")
+    _sys_plain = _FakeClient.calls[-1][2]["messages"][0]["content"]
+check("enrich có nhân vật: dặn 1girl, cấm tên làm tag", "no \"1pao\"" in _sys_persona, True)
+check("enrich có nhân vật: có bối cảnh quen thuộc", pao["scene"] in _sys_persona, True)
+check("enrich KHÔNG có nhân vật (Gradio): prompt giữ nguyên như cũ",
+      "THIS PICTURE SHOWS THE CHARACTER" in _sys_plain, False)
 
 # ══════════════════════════════════════════════════════════════════════════
 print(f"\n{'═' * 62}")

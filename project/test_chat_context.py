@@ -20,7 +20,7 @@ def _install_fake_ollama():
     calls = []
     fake = types.ModuleType("yumeai.services.ollama_service")
 
-    def summarize_conversation(messages):
+    def summarize_conversation(messages, persona_name=""):
         calls.append(list(messages))
         return f"- đã tóm tắt {len(messages)} message"
 
@@ -62,7 +62,7 @@ class SummaryCacheTests(unittest.TestCase):
     def setUp(self):
         CALLS.clear()
         clear_memory_cache()
-        FAKE.summarize_conversation = lambda messages: (
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
             CALLS.append(list(messages)) or f"- đã tóm tắt {len(messages)} message"
         )
 
@@ -119,17 +119,26 @@ class SummaryCacheTests(unittest.TestCase):
 
     def test_failed_summary_is_not_cached(self):
         """Ollama chết trả rỗng — không được cache, nếu không mất trí nhớ cả phiên."""
-        FAKE.summarize_conversation = lambda messages: (CALLS.append(list(messages)) or "")
+        FAKE.summarize_conversation = lambda messages, persona_name="": (CALLS.append(list(messages)) or "")
         history = _history((CHAT_HISTORY_MAX_MESSAGES + CHAT_SUMMARY_EVERY * 2) // 2)
         self.assertEqual(summarize_old_history(history, "Pao"), "")
         self.assertEqual(len(CALLS), 1)
 
         # Dịch vụ sống lại: phải thử lại chứ không trả về "" từ cache.
-        FAKE.summarize_conversation = lambda messages: (
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
             CALLS.append(list(messages)) or "- đã nhớ lại"
         )
         self.assertEqual(summarize_old_history(history, "Pao"), "- đã nhớ lại")
         self.assertEqual(len(CALLS), 2)
+
+    def test_summary_is_told_who_the_character_is(self):
+        """Không có tên nhân vật, model ghi "Tên: Pao" như thể đó là tên người dùng (27/10, D25)."""
+        names = []
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
+            names.append(persona_name) or "- đã tóm tắt"
+        )
+        summarize_old_history(_history((CHAT_HISTORY_MAX_MESSAGES + CHAT_SUMMARY_EVERY * 2) // 2), "Su")
+        self.assertEqual(names, ["Su"])
 
     def test_two_personas_do_not_share_summary(self):
         """Cùng một đoạn hội thoại nhưng hai nhân vật phải tóm tắt riêng."""
@@ -153,7 +162,7 @@ class HistoryLoadLimitTests(unittest.TestCase):
     def setUp(self):
         CALLS.clear()
         clear_memory_cache()
-        FAKE.summarize_conversation = lambda messages: (
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
             CALLS.append(list(messages)) or f"- tóm tắt {len(messages)} message"
         )
 
@@ -217,7 +226,7 @@ class SharedMemoryContextTests(unittest.TestCase):
     def setUp(self):
         CALLS.clear()
         clear_memory_cache()
-        FAKE.summarize_conversation = lambda messages: (
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
             CALLS.append(list(messages)) or f"- tóm tắt {len(messages)} message"
         )
         self.tmp = tempfile.TemporaryDirectory()
@@ -255,7 +264,7 @@ class SharedMemoryContextTests(unittest.TestCase):
         reloaded = self.db.get_conversation(self.conv["id"])
 
         clear_memory_cache()
-        FAKE.summarize_conversation = lambda messages: ""
+        FAKE.summarize_conversation = lambda messages, persona_name="": ""
         degraded = build_conversation_memory(self.db, reloaded, history, "Pao")
         self.assertEqual(degraded, good)
 

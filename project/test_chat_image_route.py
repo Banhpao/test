@@ -101,7 +101,8 @@ class ChatIntentTests(_ApiCase):
 
 
 class GenerateFromChatTests(_ApiCase):
-    def generate(self, conversation_id, *, chat_message="", fail=False):
+    def generate(self, conversation_id, *, chat_message="", fail=False,
+                 enriched=("1girl, window, rain", True), prompt=None):
         def fake_job(*args, **kwargs):
             if fail:
                 raise ComfyUIError("ComfyUI từ chối job (giả lập)")
@@ -111,13 +112,13 @@ class GenerateFromChatTests(_ApiCase):
         with (
             a, b,
             patch.object(main, "GENERATED_IMAGES_DIR", str(self.images_dir)),
-            patch.object(main, "enrich_for_create_ex", return_value=("1girl, window, rain", True)),
+            patch.object(main, "enrich_for_create_ex", return_value=enriched) as self.enrich_mock,
             patch.object(main, "get_checkpoint_model", return_value="anything-v5.safetensors"),
             patch.object(main, "run_comfy_job", side_effect=fake_job),
             self.client() as client,
         ):
             return client.post("/api/images/generate", json={
-                "prompt": chat_message or "Pao bên cửa sổ",
+                "prompt": prompt or chat_message or "Pao bên cửa sổ",
                 "persona_id": "pao",
                 "user_id": "user_001",
                 "conversation_id": conversation_id,
@@ -131,9 +132,10 @@ class GenerateFromChatTests(_ApiCase):
         self.assertEqual(res.status_code, 200)
 
         messages = self.database.list_messages(conv["id"])
-        self.assertEqual([(m["role"], m["content_type"]) for m in messages], [("user", "text"), ("assistant", "image")])
+        self.assertEqual([(m["role"], m["content_type"]) for m in messages],
+                         [("user", "text"), ("assistant", "text"), ("assistant", "image")])
         self.assertEqual(messages[0]["content"], "vẽ cho anh một tấm em bên cửa sổ")
-        image = json.loads(messages[1]["content"])
+        image = json.loads(messages[2]["content"])
         self.assertEqual(image["image_url"], res.json()["image_url"])
         self.assertTrue((self.images_dir / Path(image["image_url"]).name).exists())
 
@@ -142,6 +144,29 @@ class GenerateFromChatTests(_ApiCase):
         self.assertEqual(self.generate(conv["id"]).status_code, 200)
         messages = self.database.list_messages(conv["id"])
         self.assertEqual([(m["role"], m["content_type"]) for m in messages], [("assistant", "image")])
+
+    def test_character_says_a_line_with_the_picture(self):
+        # D27: bản cũ gửi ảnh không kèm câu nào, chú thích lại là câu xin của người dùng.
+        conv = self.database.create_conversation("user_001", "pao")
+        res = self.generate(conv["id"], chat_message="vẽ cho anh một tấm em bên cửa sổ")
+        caption = res.json()["caption"]
+        self.assertIn(caption, PERSONAS["pao"]["image_lines"])
+        self.assertEqual(self.database.list_messages(conv["id"])[1]["content"], caption)
+
+    def test_studio_drawing_has_no_caption(self):
+        conv = self.database.create_conversation("user_001", "pao")
+        res = self.generate(conv["id"])
+        self.assertEqual(res.json()["caption"], "")
+
+    def test_persona_name_never_reaches_the_image_prompt(self):
+        # D27: dùng thật 27/10 model dịch viết tag "1pao".
+        conv = self.database.create_conversation("user_001", "pao")
+        res = self.generate(conv["id"], chat_message="vẽ Pao đang vẽ tranh",
+                            enriched=("1pao, solo, Pao painting at an easel", True))
+        sent_text, _style, sent_persona = self.enrich_mock.call_args.args
+        self.assertNotIn("Pao", sent_text)
+        self.assertIs(sent_persona, PERSONAS["pao"])
+        self.assertEqual(res.json()["translated_prompt"], "1girl, solo, painting at an easel")
 
     def test_failed_drawing_saves_nothing(self):
         conv = self.database.create_conversation("user_001", "pao")

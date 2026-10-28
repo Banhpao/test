@@ -34,7 +34,9 @@ from yumeai.core.chat_context import (
     history_load_limit,
 )
 # Prompt text2img dùng CHUNG với app_gradio.py — hai cửa vào phải cho ra cùng một ảnh
-from yumeai.core.image_prompt import build_positive_prompt, NEGATIVE_PROMPT
+from yumeai.core.image_prompt import (
+    build_positive_prompt, NEGATIVE_PROMPT, image_caption, persona_neutral_text, scrub_persona_name,
+)
 # Bộ định tuyến chat ↔ tạo ảnh dùng CHUNG với app_gradio.py.
 from yumeai.core.prompt_router import plan_request
 from yumeai.core.runtime import run_comfy_job, ResourceBusyError
@@ -51,6 +53,7 @@ from yumeai.services.comfy_service import (
     UPSCALE_NONE,
 )
 from yumeai.services.memory_service import (
+    FACT_KEYS,
     build_conversation_memory,
     refresh_conversation_memory,
 )
@@ -409,6 +412,8 @@ async def list_memory(
         "facts": facts,
         "auto_extraction": MEMORY_FACTS_ENABLED,
         "extraction_every_messages": MEMORY_EXTRACTION_EVERY_MESSAGES,
+        # Nhãn tiếng Việt cho khoá fact; bảng "nhớ về bạn" dùng thay vì in khoá tiếng Anh (D25).
+        "labels": FACT_KEYS,
     }
 
 
@@ -721,10 +726,17 @@ async def gen_image(req: ImgReq):
     # translate_ok=False nghĩa là Ollama không phản hồi và en_tags VẪN LÀ tiếng Việt —
     # Stable Diffusion không hiểu tiếng Việt nên ảnh sẽ rác. Phải báo cho client biết,
     # bản cũ nuốt lỗi im lặng.
+    # Ảnh vẽ chính nhân vật: gỡ tên khỏi câu đưa đi dịch và khỏi tag trả về, kèm bối
+    # cảnh quen thuộc của nhân vật (D27 — dùng thật 27/10 ra tag `1pao`).
+    source_text = persona_neutral_text(image_prompt, persona)
     if req.enrich:
-        en_tags, translate_ok = await asyncio.to_thread(enrich_for_create_ex, image_prompt, req.style)
+        en_tags, translate_ok = await asyncio.to_thread(
+            enrich_for_create_ex, source_text, req.style, persona
+        )
     else:
-        en_tags, translate_ok = await asyncio.to_thread(translate_vi_en_ex, image_prompt)
+        en_tags, translate_ok = await asyncio.to_thread(translate_vi_en_ex, source_text)
+    if translate_ok:
+        en_tags = scrub_persona_name(en_tags, persona)
     timing["translate_s"] = round(time.perf_counter() - started, 3)
 
     # Bước 2: Lấy model checkpoint hợp lệ (loại SDXL/LoRA/inpaint — máy 4GB VRAM).
@@ -793,14 +805,26 @@ async def gen_image(req: ImgReq):
             "translation_ok": translate_ok,
         },
     )
+    # Ảnh xin từ khung chat thì nhân vật nói một câu kèm theo, lưu thành lượt chữ
+    # riêng ngay trước ảnh: mở lại hội thoại vẫn thấy, và model chat thấy nó trong lịch
+    # sử (lượt ảnh không đi vào lịch sử chat). Bản cũ chỉ có ảnh, chú thích lại là chính
+    # câu xin của người dùng (D27).
+    chat_message = req.chat_message.strip()
+    caption = image_caption(persona, seed) if chat_message else ""
     if req.conversation_id:
-        chat_message = req.chat_message.strip()
         if chat_message:
             await asyncio.to_thread(
                 database.append_message,
                 req.conversation_id,
                 "user",
                 chat_message,
+            )
+        if caption:
+            await asyncio.to_thread(
+                database.append_message,
+                req.conversation_id,
+                "assistant",
+                caption,
             )
         await asyncio.to_thread(
             database.append_message,
@@ -836,6 +860,8 @@ async def gen_image(req: ImgReq):
         "style": req.style,
         "seed": seed,
         "translation_ok": translate_ok,
+        # Câu nhân vật nói kèm ảnh khi xin từ khung chat ("" nếu không có).
+        "caption": caption,
         # Giây: dịch/viết prompt, ComfyUI vẽ, cả lượt. Client cũ bỏ qua trường mới này.
         "timing": dict(timing),
         "warning": None if translate_ok else (

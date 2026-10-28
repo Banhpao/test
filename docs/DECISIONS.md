@@ -737,3 +737,73 @@ hơn nhanh, nên chọn model giữ vai và nhớ tốt hơn, chấp nhận ch�
 - **Giữ qwen2.5:3b vì nhanh.** Nhanh mà tuột vai và quên tên người dùng thì hỏng đúng trụ sản phẩm.
 - **Chọn model theo VRAM của máy.** Chưa có số đo trên máy GPU lớn; chọn một mặc định, máy nào cần
   nhanh thì `MO-PAOCAKE.cmd --model qwen2.5:3b` hoặc `OLLAMA_MODEL`.
+
+## D25 — Trí nhớ chỉ ghi điều người dùng tự nói
+**Ngày:** 2026-10-27 · **Trạng thái:** đã làm, chờ chạy thử lại trên máy
+
+**Bối cảnh.** Dùng thật 27/10 (TESTLOG): với Pao, 7/13 fact tự trích là chuyện của **nhân vật** ghi
+như của người dùng (`interest: vẽ mưa đêm và mèo hoang`, `honorific: Pao`…), có cả fact sai có hại
+`boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó. Tóm tắt hội
+thoại cũng ghi "Tên: Pao". Nguyên nhân: bản ghi gửi cho model chỉ có `user:`/`assistant:`, model
+không biết "assistant" là Pao; khoá fact tự do nên model bịa khoá mới mỗi lần.
+
+**Quyết định** (`yumeai/services/memory_service.py`, `ollama_service.summarize_conversation`):
+- Bản ghi gửi đi gọi rõ hai người: `NGƯỜI DÙNG` và `<tên> (nhân vật)`; prompt trích fact và prompt
+  tóm tắt nói thẳng đó là hai người khác nhau, không ghi chuyện của nhân vật.
+- Bộ khoá **cố định** `FACT_KEYS` (13 khoá, kèm nhãn tiếng Việt). Khoá quen thuộc ngoài bộ được quy
+  về khoá chuẩn (`hobby` → `likes`, `location` → `home_city`…); khoá lạ bị bỏ.
+- Mỗi fact phải có `evidence` — nguyên văn câu người dùng — và phải **đối chiếu được với một câu
+  khẳng định của người dùng**: giá trị trùng ≥ 50% từ có nghĩa, bằng chứng trùng ≥ 60%. Câu hỏi và
+  câu nhờ vả ("kể đi", "vẽ cho anh…") không tính là lời khẳng định. Giá trị chứa tên nhân vật bị bỏ.
+- Tóm tắt bỏ dòng rỗng kiểu "Tuổi: Chưa có".
+- `/api/memory` trả thêm `labels` để bảng "… nhớ về bạn" hiện nhãn tiếng Việt.
+
+Thử trên đúng dữ liệu 27/10: cả 7 fact sai bị bỏ, các fact đúng giữ nguyên.
+
+**Đã loại.**
+- **Chỉ sửa prompt.** Model 3–4B vẫn lẫn dù được dặn; cần lớp kiểm bằng code không phụ thuộc model.
+- **Gộp mọi câu người dùng rồi so.** Đã thử: quá lỏng (7 fact sai vẫn lọt) vì từ rải rác khắp hội
+  thoại ghép lại thành gần như mọi thứ. Phải khớp trong **một** câu.
+- **Bỏ hẳn tự trích fact.** Mất trụ "trò chuyện có trí nhớ"; người dùng vẫn sửa/xoá được trong bảng.
+
+## D26 — Câu hỏi có chữ "vẽ" là trò chuyện, không phải lệnh vẽ
+**Ngày:** 2026-10-27 · **Trạng thái:** đã làm
+
+**Bối cảnh.** "Pao đang vẽ gì vậy?" bị bộ định tuyến hiểu là xin ảnh và vẽ luôn (TESTLOG 27/10, lỗi 1).
+Pao là sinh viên hội hoạ nên chữ "vẽ" xuất hiện trong trò chuyện thường xuyên.
+
+**Quyết định** (`yumeai/core/prompt_router.py`, `looks_like_create`). Câu có "vẽ/draw" mà có dấu hiệu
+câu hỏi (`?`, hoặc kết thúc bằng gì/không/chưa/sao/à/hả/nhỉ/vậy/thế nào/bao giờ/ở đâu…) thì là trò
+chuyện — **trừ khi** có dấu hiệu nhờ vẽ rõ: "vẽ cho/giúp/thử/một/tấm/bức…", "vẽ anh/em/mình…",
+kết bằng "được không/nhé/nha/đi", hoặc "can you/please/for me". Vì vậy "vẽ cho anh một tấm được không?"
+vẫn là xin ảnh. `test_router.py` mục 3b: 7 câu trò chuyện, 6 câu xin ảnh.
+
+**Đã loại.** **Hỏi LLM cho mọi câu có chữ "vẽ".** Thêm vài giây mỗi lượt và lại phải đổi model trên GPU 4 GB.
+
+## D27 — Ảnh vẽ chính nhân vật: không tên trong prompt, bối cảnh quen thuộc, có câu kèm theo
+**Ngày:** 2026-10-27 · **Trạng thái:** đã làm, chờ chạy thử lại trên máy
+
+**Bối cảnh.** Dùng thật 27/10 (lỗi 6): prompt ảnh Pao có tag `1pao` và bối cảnh "Chinese ink art
+studio" (Pao học ở Tokyo); ảnh Pao cầm cọ đưa lên miệng chứ không đang vẽ. Ảnh gửi trong hội thoại
+không kèm câu nào của nhân vật — chú thích dưới ảnh lại là câu xin của người dùng. Cùng đợt: Pao lặp
+"B-boys." ở 9/13 câu (bản méo của "B-baka" trong few-shot) và có câu tự xưng "Mình" (lỗi 5).
+
+**Quyết định.**
+- `personas.py`: thêm `scene` (nơi quen thuộc, tiếng Anh) và `image_lines` (câu nói khi gửi ảnh).
+  Pao: few-shot "B-baka!" → "Baka!", lời chào bỏ "H-hừ"; speech_style chỉ cho chêm đúng Baka/Urusai/
+  Mou, cấm tiếng Anh, từ bịa, nói lắp và xưng "mình"/"tôi".
+- `yumeai/core/image_prompt.py`: `persona_neutral_text()` thay tên nhân vật bằng "cô ấy" trước khi
+  dịch; `scrub_persona_name()` đổi `1<tên>` → `1girl` và bỏ tên khỏi prompt ra; `image_caption()` chọn
+  câu kèm ảnh theo seed.
+- `enrich_for_create_ex(..., persona=None)`: có nhân vật thì dặn thêm: một cô gái (`1girl, solo`),
+  không dùng tên làm tag, không tả mặt/tóc (đã có `appearance`), hành động phải thấy rõ (vẽ = cọ chạm
+  giấy), bối cảnh mặc định là `scene` nếu người dùng không nói nơi. **app_gradio.py không truyền
+  `persona` nên prompt của Gradio giữ nguyên.**
+- `/api/images/generate` có `chat_message` thì lưu câu nhân vật thành **lượt chữ riêng** ngay trước ảnh
+  và trả `caption`. `/app` hiện câu đó thành bong bóng nhân vật; chú thích dưới ảnh ghi "Bạn xin: …".
+
+**Đã loại.**
+- **Lưu câu kèm ảnh bên trong JSON của lượt ảnh.** Lượt ảnh không đi vào lịch sử chat, nên model sẽ
+  không biết nhân vật vừa nói gì; lượt chữ riêng thì có, và mở lại hội thoại hiện đúng mà không cần sửa UI.
+- **Cho model chat viết câu kèm ảnh.** Thêm một lần gọi model và chờ thêm vài giây sau khi đã chờ
+  vẽ 40–99 s; câu viết sẵn đúng giọng là đủ ở bước này.

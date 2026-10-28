@@ -216,7 +216,8 @@ def summarize_old_history(history, persona_name: str = "") -> str:
 
     # import muộn để tránh phụ thuộc vòng và để module này nhẹ khi chỉ cần lọc lịch sử
     from yumeai.services.ollama_service import summarize_conversation
-    summary = summarize_conversation(window)
+    # Có tên nhân vật thì model mới tách được nhân vật với người dùng (D25).
+    summary = summarize_conversation(window, persona_name)
     # KHÔNG cache chuỗi rỗng: Ollama chết cũng trả "", cache lại là khoá cứng
     # "không có trí nhớ" cho tới hết phiên dù dịch vụ đã sống lại.
     if summary:
