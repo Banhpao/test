@@ -807,3 +807,33 @@ không kèm câu nào của nhân vật — chú thích dưới ảnh lại là 
   không biết nhân vật vừa nói gì; lượt chữ riêng thì có, và mở lại hội thoại hiện đúng mà không cần sửa UI.
 - **Cho model chat viết câu kèm ảnh.** Thêm một lần gọi model và chờ thêm vài giây sau khi đã chờ
   vẽ 40–99 s; câu viết sẵn đúng giọng là đủ ở bước này.
+
+## D28 — Sau lần chạy lại 28/10: lọc tóm tắt, emoji và tag ngoại hình
+**Ngày:** 2026-10-28 · **Trạng thái:** đã làm, chờ chạy lại trên máy
+
+**Bối cảnh.** Chạy lại đúng kịch bản 27/10 sau D25–D27 (TESTLOG 28/10). Trích fact đã đúng hẳn, nhưng:
+- **Tóm tắt hội thoại** (qwen2.5:3b) vẫn viết toàn chuyện của Pao ("- Pao sống ở Đà Nẵng" — sai cả hai phía)
+  dù prompt đã gọi đúng tên hai người. Tóm tắt được đưa vào prompt dưới mục "những gì đã biết về người
+  này"; ngay sau đó Pao trả lời "Mình tên Minh…".
+- Pao kết câu bằng emoji (✖️, 🚫) dù hồ sơ cấm.
+- Model dịch vẫn tả tóc trong prompt ảnh ("long black hair tied up" cho Su tóc nâu nhạt) dù đã dặn không tả.
+
+**Quyết định.**
+- `memory_service.ground_summary()`: mỗi dòng tóm tắt phải qua đúng luật của fact (D25) — không chứa tên
+  nhân vật, khớp một câu khẳng định của người dùng; không tính các từ chỉ chủ ngữ ("người dùng", "họ",
+  "tên"). Áp cho cả bản vừa tính lẫn bản đã lưu trong DB (bản cũ có thể còn dòng sai). Trên dữ liệu thật:
+  cả hai bản tóm tắt của lần chạy lại bị bỏ hết; bản trộn đúng/sai chỉ còn dòng về người dùng.
+- `chat_context.strip_emoji()` lọc emoji ngay trên luồng token của `/api/chat` (người dùng không thấy,
+  DB không lưu). Gradio không đổi.
+- `image_prompt.drop_look_tags()`: khi vẽ chính nhân vật, bỏ tag tóc/mắt/mặt model tự thêm — ngoại hình
+  lấy từ `appearance`.
+
+**Đã loại.**
+- **Sửa tiếp prompt tóm tắt.** D25 đã sửa prompt; model 3B vẫn sai. Lớp kiểm bằng code là chỗ chắc chắn.
+- **Dặn thêm "không dùng emoji" trong prompt.** Hồ sơ đã dặn; lọc ở luồng thì chắc chắn và rẻ.
+
+**Chưa quyết (chờ chủ dự án).** Bước tóm tắt chạy **đồng bộ** trước câu trả lời và đổi model trên GPU 4 GB:
+lần chạy lại có một lượt chờ 58 s chỉ ở bước dựng ngữ cảnh, và cả hai bản tóm tắt đều bị bỏ hết sau khi lọc.
+Fact (D25) đã mang đủ thông tin người dùng. Lựa chọn: (a) tắt tóm tắt mặc định (`YUMEAI_CHAT_SUMMARY=0`);
+(b) tóm tắt bằng chính model chat (`YUMEAI_TRANSLATE_MODEL=qwen3:4b-instruct`, cần đo chất lượng dịch prompt
+ảnh); (c) chuyển tóm tắt sang chạy nền như trích fact.

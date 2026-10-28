@@ -10,6 +10,14 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-10-28
+
+- Chạy lại kịch bản "Tuấn" của 27/10 trên dữ liệu riêng (`_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd` mở app với `YUMEAI_DATA_DIR` = `project\data\thu-lai\<ngày-giờ>`, không đụng DB thật): kết quả ở TESTLOG 28/10. Trích fact 8/8 và 6/6 đúng (27/10: 6/13, 5/7); lỗi 2, 3, 4 hết; ảnh có câu kèm, không còn `1pao`.
+- Sửa thêm sau lần chạy lại (D28): tóm tắt hội thoại chỉ giữ dòng dựng từ lời người dùng (`ground_summary()`, áp cả bản đã lưu); `/api/chat` lọc emoji trên luồng token (`strip_emoji()`); ảnh nhân vật bỏ tag tóc/mắt/mặt model tự thêm (`drop_look_tags()`). Test: `test_chat_context.py` 18 (bộ tóm tắt giả nay trả câu người dùng và được đặt lại mỗi test), `test_memory.py` 22, `test_router.py` thêm 3 kiểm.
+- Commit `7446196` (6 lỗi 27/10) đã đẩy lên `review-fixes`; 14 test Paocake + ComfyUI đạt trên máy trước khi commit.
+
+---
+
 ## 2026-10-27
 
 - Tài liệu (không đổi mã): thêm `docs/MAY.md` — nơi duy nhất ghi máy đang dùng (laptop RTX 3050 4 GB, Ollama trên ổ rời cổng 11435) và hệ quả cho code; AGENTS mục 5, STATE, TESTLOG, PRODUCT_ROADMAP dẫn link về đó thay vì chép thông số. Bỏ chỗ gọi Radeon 680M là "máy hiện tại"; sơ đồ code `formyhorny/` → `Paocake_ai/`.

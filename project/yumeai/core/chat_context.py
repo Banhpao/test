@@ -17,6 +17,7 @@ Hai lỗi của bản cũ được sửa ở đây:
    Nay: cắt cửa sổ theo CHAT_HISTORY_MAX_MESSAGES.
 """
 import hashlib
+import re
 
 from yumeai.core.config import (
     CHAT_HISTORY_MAX_MESSAGES, CHAT_NUM_CTX, CHAT_TEMPERATURE, CHAT_TOP_P,
@@ -73,6 +74,17 @@ def _content_text(content):
     if isinstance(content, (list, tuple)):
         return "\n".join(_content_text(part) for part in content if part is not None).strip()
     return ""
+
+
+# Emoji: hồ sơ nhân vật cấm ("Không dùng emoji") mà qwen3:4b vẫn chèn ✖️, 🚫 cuối câu
+# (chạy lại 28/10, D28). Lọc ngay trên luồng token để người dùng không thấy và DB không lưu.
+# Cùng dải ký tự với luật "Không emoji" của bench_chat.py.
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF\uFE0F\u200D]")
+
+
+def strip_emoji(text: str) -> str:
+    """Bỏ emoji khỏi một mẩu câu trả lời (an toàn với token bị cắt giữa emoji)."""
+    return _EMOJI_RE.sub("", text or "")
 
 
 def clean_history(history) -> list[dict]:

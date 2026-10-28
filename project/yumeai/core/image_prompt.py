@@ -81,6 +81,21 @@ def scrub_persona_name(en_tags: str, persona: dict | None) -> str:
     return ", ".join(p for p in parts if p)
 
 
+# Tag tả mặt/tóc/mắt do model dịch tự thêm. Ngoại hình nhân vật đã có trong
+# persona["appearance"] đứng đầu prompt; tag tự bịa thì cãi nhau với nó: chạy lại 28/10,
+# ảnh Su (tóc nâu nhạt gợn sóng) nhận thêm "long black hair tied up" dù đã dặn không tả tóc (D28).
+_LOOK_TAG_RE = re.compile(
+    r"(?<!\w)(hair|hairstyle|bangs|ponytail|braids?|eyes|eye color|face|freckles|skin tone)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def drop_look_tags(en_tags: str) -> str:
+    """Bỏ các tag tả tóc/mắt/mặt khi ảnh vẽ chính nhân vật (ngoại hình lấy từ appearance)."""
+    parts = [p.strip() for p in (en_tags or "").split(",")]
+    return ", ".join(p for p in parts if p and not _LOOK_TAG_RE.search(p))
+
+
 def image_caption(persona: dict | None, seed: int) -> str:
     """Câu nhân vật nói kèm tấm ảnh gửi trong hội thoại. Chọn theo seed để
     cùng một ảnh luôn ra cùng một câu (dễ kiểm, không cần lưu thêm trạng thái)."""

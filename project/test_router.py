@@ -541,7 +541,8 @@ with _patch.object(_config, "OLLAMA_NUM_GPU", 0):
 # ══════════════════════════════════════════════════════════════════════════
 section("16. Ảnh vẽ chính nhân vật (D27)")
 # ══════════════════════════════════════════════════════════════════════════
-from yumeai.core.image_prompt import image_caption, persona_neutral_text, scrub_persona_name
+from yumeai.core.image_prompt import drop_look_tags, image_caption, persona_neutral_text, scrub_persona_name
+from yumeai.core.chat_context import strip_emoji
 
 for pid, p in PERSONAS.items():
     check(f"persona {pid!r} có bối cảnh quen thuộc (tiếng Anh)", bool(p.get("scene", "").strip()), True)
@@ -560,6 +561,15 @@ check("1pao → 1girl, bỏ tên và Pao's",
       "1girl, solo, painting, sketchbook, studio")
 check("không đụng chữ chỉ CHỨA tên (sushi, Super)",
       scrub_persona_name("1girl, sushi, Super light", PERSONAS["su"]), "1girl, sushi, Super light")
+
+# Chạy lại 28/10: ảnh Su (tóc nâu nhạt) nhận "long black hair tied up" từ model dịch.
+check("bỏ tag tóc/mắt/mặt model tự thêm, giữ hành động và bối cảnh",
+      drop_look_tags("1girl, solo, long black hair tied up, detailed face with focused eyes, "
+                     "sitting at a small wooden desk, open notebook"),
+      "1girl, solo, sitting at a small wooden desk, open notebook")
+# Chạy lại 28/10: Pao kết câu bằng "✖️", "🚫" dù hồ sơ cấm emoji.
+check("lọc emoji khỏi câu trả lời", strip_emoji("Mou... ngủ đi. ✖️ 🚫"), "Mou... ngủ đi.  ")
+check("không đụng chữ Việt và dấu câu", strip_emoji("Baka! ...Tớ ở đây — đừng lo."), "Baka! ...Tớ ở đây — đừng lo.")
 
 # Pao: không còn mẫu nói lắp "B-baka" (model nhỏ méo thành "B-boys" ở 9/13 câu, 27/10).
 # Chỉ soi câu MẪU (lời chào + few-shot) — speech_style có nhắc 'B-b...' chính là để cấm.

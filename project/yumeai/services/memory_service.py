@@ -15,7 +15,7 @@ import time
 
 import httpx
 
-from yumeai.core.chat_context import summarize_old_history
+from yumeai.core.chat_context import clean_history, summarize_old_history
 from yumeai.core.personas import PERSONAS
 from yumeai.core.config import (
     CHAT_NUM_CTX,
@@ -218,6 +218,35 @@ def _grounded_in_user(value: str, evidence: str, user_texts: list[str],
         if max(_overlap(evidence, words) for words in statements) < _EVIDENCE_MIN_OVERLAP:
             return False
     return True
+
+
+# Từ chỉ "ai" ở đầu dòng tóm tắt ("Người dùng tên Tuấn", "Họ sống ở…") — không tính khi
+# đối chiếu, vì người dùng không bao giờ tự gọi mình như vậy.
+_SUMMARY_SUBJECT_WORDS = {"người", "dùng", "họ", "anh", "ấy", "chị", "bạn", "mình", "tôi", "tên"}
+
+
+def ground_summary(summary: str, user_texts: list[str], persona_name: str = "") -> str:
+    """Chỉ giữ dòng tóm tắt dựng được từ lời NGƯỜI DÙNG (D28).
+
+    Prompt tóm tắt đã gọi đúng tên hai người mà qwen2.5:3b vẫn viết toàn chuyện của nhân
+    vật: "- Pao đang vẽ ký hoạ ngoài trời dưới mưa", "- Pao sống ở Đà Nẵng" (sai cả hai
+    phía). Tóm tắt được nhét vào prompt dưới mục "những gì đã biết về người này", nên
+    lọc bằng đúng luật của fact: không chứa tên nhân vật, khớp một câu khẳng định của
+    người dùng. Dòng nào không qua thì bỏ; không dòng nào qua thì trả "".
+    """
+    kept = []
+    for line in (summary or "").splitlines():
+        body = line.strip().lstrip("-•*").strip()
+        if not body:
+            continue
+        words = [w for w in re.findall(r"\w+", body.lower()) if w not in _SUMMARY_SUBJECT_WORDS]
+        if words and _grounded_in_user(" ".join(words), "", user_texts, persona_name) and not (
+            persona_name and re.search(rf"(?<!\w){re.escape(persona_name)}(?!\w)", body, re.IGNORECASE)
+        ):
+            kept.append(f"- {body}")
+        else:
+            print(f"🧹 Bỏ dòng tóm tắt không dựng được từ lời người dùng: {body}")
+    return "\n".join(kept)
 
 
 def parse_memory_response(raw: str, user_texts: list[str] | None = None,
@@ -429,8 +458,10 @@ def build_conversation_memory(
     )
     fact_context = format_memory_context(facts)
 
-    session_summary = summarize_old_history(history, persona_name)
-    stored_summary = (conversation.get("memory_summary") or "").strip()
+    # Lọc cả bản vừa tính lẫn bản đã lưu: bản lưu trước 28/10 có thể còn dòng sai.
+    user_texts = [item["content"] for item in clean_history(history) if item["role"] == "user"]
+    session_summary = ground_summary(summarize_old_history(history, persona_name), user_texts, persona_name)
+    stored_summary = ground_summary((conversation.get("memory_summary") or "").strip(), user_texts, persona_name)
     # Ghi lại để tóm tắt SỐNG QUA restart. Trước D13 cột memory_summary được đọc
     # nhưng không nơi nào ghi, nên mở lại app là tính lại từ đầu.
     if session_summary and session_summary != stored_summary:

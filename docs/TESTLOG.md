@@ -12,6 +12,45 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
+## 2026-10-28 — NVIDIA GeForce RTX 3050 Laptop GPU 4 GB, RAM 31.7 GiB — chạy lại kịch bản 27/10 sau khi sửa 6 lỗi (D25–D27)
+
+**Cấu hình chạy**
+- Code ở commit `7446196`. Như 27/10: `qwen3:4b-instruct`, dịch/tóm tắt `qwen2.5:3b`, ComfyUI `--lowvram`, "Tốt nhất (50 steps)".
+- Mở bằng `_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd`: dữ liệu riêng `project\data\thu-lai\20261028-083706\` (DB trống như 27/10);
+  DB thật không bị đụng.
+- Đúng 14 câu Pao và 7 câu Su của 27/10 (lấy từ DB), gửi qua chính hàm `send()` của `/app`; thêm 1 câu xin ảnh Pao
+  ("Vẽ cho mình một tấm Pao đang ngồi ký hoạ đi.") để kiểm lỗi 6. Máy mất kết nối ~9 giờ giữa câu 10 và 11 của Pao
+  (laptop ngủ); app vẫn chạy, câu 10 gửi lại.
+
+| Hạng mục | 27/10 | 28/10 |
+|---|---|---|
+| Trích fact Pao | 6/13 đúng, thiếu con chó | **8/8 đúng**, có con chó Bơ (2 cặp gần trùng: `family`/`pet`, `likes`/`favorite_food_drink`) |
+| Trích fact Su | 5/7 | **6/6 đúng** |
+| Tóm tắt hội thoại Pao | "Tên: Pao", "Pao - B-boys" | vẫn sai: 2 bản, cả 9 dòng là chuyện của Pao ("Pao sống ở Đà Nẵng") → D28 |
+| "Pao đang vẽ gì vậy?" | vẽ ảnh luôn | trò chuyện (lỗi 2 hết) |
+| Enter lúc đang bận | không gửi, không báo | dòng gợi ý "Pao đang trả lời — đợi xong rồi nhấn Enter…", nháy; chữ giữ nguyên (lỗi 3 hết) |
+| Bảng "… nhớ về bạn" | không tự làm mới, khoá tiếng Anh | Su: hiện 6 fact sau ~40 s không cần tải lại; nhãn tiếng Việt (lỗi 4 hết) |
+| "B-boys" / xưng "Mình" | 9/13 câu / có | 0 / 2 câu (lặp "mình" của người dùng khi trả lời câu hỏi trí nhớ) |
+| Prompt ảnh | `1pao`, "Chinese ink art studio" | `1girl, solo`, xưởng vẽ / phòng gỗ Kyoto đúng `scene`; còn tả tóc trái ngoại hình → D28 |
+| Câu kèm ảnh | không có | Pao "Hừ, cầm lấy…", Su "Anh xem nhé…" (lỗi 6 hết) |
+| Ảnh Su đang viết | không thấy viết | **đang cầm bút viết vào sổ**, áo cardigan kem, bên cửa sổ |
+| Ảnh Pao đang ký hoạ | cầm cọ đưa lên miệng | ngồi cạnh giá vẽ, chưa thấy rõ đang vẽ |
+| Nhớ trong hội thoại (Pao) | tên, nghề, nơi đúng; đồ uống, chó "không biết" | đồ uống và chó đúng; **tên sai ("Minh")** ngay sau bản tóm tắt sai |
+
+**Số đo** (`/api/stats`, `perf.jsonl` của thư mục thử): chat 20 ok + 1 huỷ (lúc mất kết nối); cả lượt trung vị 3,7 s;
+chữ đầu trung vị 0,49 s; 19,2 token/giây; `reloads` 4/21. Ảnh 59 và 91 s (ComfyUI 52 và 84 s, viết prompt ~5 s).
+Lượt chậm: khởi động lạnh 31 s; câu 7 chờ chữ đầu 11 s (không nạp model — có lẽ đang xếp hàng sau lượt trích fact
+chạy nền); **câu 13 chờ 58 s ở bước dựng ngữ cảnh** (tóm tắt bằng qwen2.5:3b, đổi model trên GPU) rồi 4,6 s nạp lại.
+
+**Lỗi còn lại**
+1. Tóm tắt hội thoại vẫn lẫn nhân vật với người dùng, lại tốn 58 s → đã lọc bằng code (D28); nên quyết có giữ bước này.
+2. Pao chèn emoji (✖️, 🚫) ở 2 câu → lọc trên luồng (D28).
+3. Pao trả lời câu dụ AI: "Không ai biết tao là AI cả…" — không nhận thẳng nhưng hở. Su lần này **liệt kê gạch đầu dòng**
+   ba câu trích (27/10 không). Mỗi kịch bản chỉ chạy một lần nên chưa nói được là tệ hơn; cần `bench_chat.py` nhiều lượt.
+4. Prompt ảnh vẫn tả tóc trái ngoại hình (Su "long black hair") → bỏ tag tóc/mắt/mặt (D28). Ảnh Pao chưa rõ hành động vẽ.
+
+---
+
 ## 2026-10-27 — NVIDIA GeForce RTX 3050 Laptop GPU 4 GB, RAM 31.7 GiB — lần đầu dùng thật `/app` (chat + vẽ ảnh)
 
 **Phần cứng**

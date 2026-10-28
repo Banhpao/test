@@ -352,6 +352,24 @@ class FactGroundingTests(unittest.TestCase):
         self.assertEqual(context.splitlines(), ["- Thú cưng: chó tên Bơ", "- tu_dat: khoá người dùng tự đặt"])
 
 
+class SummaryGroundingTests(unittest.TestCase):
+    """Chạy lại 28/10: tóm tắt vẫn viết chuyện của Pao dù prompt đã gọi đúng tên hai người."""
+
+    def test_real_summary_from_28_10_is_dropped_entirely(self):
+        summary = ("- Pao đang vẽ ký hoạ ngoài trời dưới mưa.\n- Pao không muốn nhắc đến việc mình vẽ ký hoạ.\n"
+                   "- Pao là một nghệ sĩ vẽ ký hoạ.\n- Pao sống ở Đà Nẵng.\n"
+                   "- Pao gặp khó khăn với deadline công việc.")
+        self.assertEqual(memory_service.ground_summary(summary, TUAN_LINES, "Pao"), "")
+
+    def test_lines_about_the_user_are_kept(self):
+        summary = ("- Tên: Pao\n- Người dùng tên Tuấn, là kỹ sư điện tử\n- Sống ở Đà Nẵng\n"
+                   "- Nuôi chó tên Bơ\n- Hay ra ngoài ký hoạ buổi tối\n- Tối nay Tokyo có mưa")
+        self.assertEqual(
+            memory_service.ground_summary(summary, TUAN_LINES, "Pao"),
+            "- Người dùng tên Tuấn, là kỹ sư điện tử\n- Sống ở Đà Nẵng\n- Nuôi chó tên Bơ",
+        )
+
+
 class SummaryPromptTests(unittest.TestCase):
     def test_summary_names_the_character_and_drops_empty_lines(self):
         from yumeai.services import ollama_service

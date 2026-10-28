@@ -32,10 +32,12 @@ from yumeai.core.chat_context import (
     build_persona_messages,
     chat_options,
     history_load_limit,
+    strip_emoji,
 )
 # Prompt text2img dùng CHUNG với app_gradio.py — hai cửa vào phải cho ra cùng một ảnh
 from yumeai.core.image_prompt import (
-    build_positive_prompt, NEGATIVE_PROMPT, image_caption, persona_neutral_text, scrub_persona_name,
+    build_positive_prompt, NEGATIVE_PROMPT, drop_look_tags, image_caption, persona_neutral_text,
+    scrub_persona_name,
 )
 # Bộ định tuyến chat ↔ tạo ảnh dùng CHUNG với app_gradio.py.
 from yumeai.core.prompt_router import plan_request
@@ -600,7 +602,8 @@ async def chat(req: ChatReq):
                                 d = json.loads(line)
                             except Exception:
                                 continue
-                            tok = d.get("message", {}).get("content", "")
+                            # Bỏ emoji ngay trên luồng: hồ sơ nhân vật cấm mà model vẫn chèn (D28).
+                            tok = strip_emoji(d.get("message", {}).get("content", ""))
                             if tok:
                                 if first_token_at is None:
                                     first_token_at = time.perf_counter()
@@ -736,7 +739,8 @@ async def gen_image(req: ImgReq):
     else:
         en_tags, translate_ok = await asyncio.to_thread(translate_vi_en_ex, source_text)
     if translate_ok:
-        en_tags = scrub_persona_name(en_tags, persona)
+        # Bỏ cả tag tóc/mắt/mặt model tự thêm: ngoại hình lấy từ persona["appearance"] (D28).
+        en_tags = drop_look_tags(scrub_persona_name(en_tags, persona))
     timing["translate_s"] = round(time.perf_counter() - started, 3)
 
     # Bước 2: Lấy model checkpoint hợp lệ (loại SDXL/LoRA/inpaint — máy 4GB VRAM).

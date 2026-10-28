@@ -22,7 +22,10 @@ def _install_fake_ollama():
 
     def summarize_conversation(messages, persona_name=""):
         calls.append(list(messages))
-        return f"- đã tóm tắt {len(messages)} message"
+        # Trả lại câu người dùng cuối trong cửa sổ: tóm tắt phải dựng được từ lời người
+        # dùng, nếu không ground_summary() bỏ hết (D28).
+        users = [m["content"] for m in messages if m.get("role") == "user"]
+        return f"- {users[-1]}" if users else ""
 
     fake.summarize_conversation = summarize_conversation
     sys.modules["yumeai.services.ollama_service"] = fake
@@ -30,6 +33,7 @@ def _install_fake_ollama():
 
 
 CALLS, FAKE = _install_fake_ollama()
+_DEFAULT_SUMMARIZE = FAKE.summarize_conversation
 sys.modules.setdefault("httpx", types.ModuleType("httpx"))
 
 from yumeai.core.chat_context import (  # noqa: E402
@@ -233,6 +237,9 @@ class SharedMemoryContextTests(unittest.TestCase):
         self.db = YumeDatabase(Path(self.tmp.name) / "yumeai.db")
         self.db.initialize(TEST_PERSONAS)
         self.conv = self.db.get_or_create_conversation("user_001", "pao")
+        # Test trước có thể đã thay bộ tóm tắt giả (Ollama "tắt") — mỗi test bắt đầu sạch.
+        FAKE.summarize_conversation = _DEFAULT_SUMMARIZE
+        clear_memory_cache()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -267,6 +274,38 @@ class SharedMemoryContextTests(unittest.TestCase):
         FAKE.summarize_conversation = lambda messages, persona_name="": ""
         degraded = build_conversation_memory(self.db, reloaded, history, "Pao")
         self.assertEqual(degraded, good)
+
+    def test_summary_lines_about_the_character_are_dropped(self):
+        """Chạy lại 28/10: qwen2.5:3b viết "- Pao sống ở Đà Nẵng" — sai cả hai phía, mà vẫn
+        vào prompt dưới mục "những gì đã biết về người này". Chỉ giữ dòng dựng từ lời người dùng."""
+        history = [
+            {"role": "user", "content": "Chào Pao, mình là Tuấn, kỹ sư điện tử ở Đà Nẵng."},
+            {"role": "assistant", "content": "Hừ. Tao đang vẽ ký hoạ ngoài trời dưới mưa."},
+        ] * ((CHAT_HISTORY_MAX_MESSAGES + CHAT_SUMMARY_EVERY * 2) // 2)
+        clear_memory_cache()
+        old = FAKE.summarize_conversation
+        FAKE.summarize_conversation = lambda messages, persona_name="": (
+            "- Pao đang vẽ ký hoạ ngoài trời dưới mưa.\n- Pao sống ở Đà Nẵng.\n"
+            "- Người dùng tên Tuấn, là kỹ sư điện tử."
+        )
+        try:
+            memory = build_conversation_memory(self.db, self.conv, history, "Pao")
+        finally:
+            FAKE.summarize_conversation = old
+        self.assertEqual(memory, "- Người dùng tên Tuấn, là kỹ sư điện tử.")
+
+    def test_old_stored_summary_is_filtered_too(self):
+        """Bản tóm tắt lưu trước 28/10 có thể còn dòng sai; lúc Ollama tắt nó là bản được dùng."""
+        self.db.update_memory_summary(self.conv["id"], "- Tên: Pao\n- Cách xưng hô: Pao - B-boys")
+        reloaded = self.db.get_conversation(self.conv["id"])
+        clear_memory_cache()
+        old = FAKE.summarize_conversation
+        FAKE.summarize_conversation = lambda messages, persona_name="": ""
+        try:
+            memory = build_conversation_memory(self.db, reloaded, self._long_history(), "Pao")
+        finally:
+            FAKE.summarize_conversation = old
+        self.assertEqual(memory, "")
 
     def test_facts_are_included_in_the_memory_block(self):
         self.db.upsert_memory_fact("user_001", "pao", "ten_goi", "Bánh Páo")
