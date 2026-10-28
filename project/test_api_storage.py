@@ -241,7 +241,8 @@ class ApiStorageTests(unittest.TestCase):
             {"role": "user", "content": f"B-{i}"} for i in range(count)
         ]
         chat_context.clear_memory_cache()
-        with patch(
+        with patch.object(chat_context, "CHAT_SUMMARY", True), patch(
+            # Tóm tắt mặc định tắt từ D29; test này kiểm cache khi nó được bật.
             "yumeai.services.ollama_service.summarize_conversation",
             side_effect=["trí nhớ A", "trí nhớ B"],
         ) as summarize:

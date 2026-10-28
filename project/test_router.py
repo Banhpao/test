@@ -461,6 +461,13 @@ _out = _subprocess.run(
 )
 check("model chat mặc định = qwen3:4b-instruct (như env.example/RUNBOOK, D24)", _out.stdout.strip(),
       "qwen3:4b-instruct")
+_env_sum = {k: v for k, v in _os.environ.items() if k != "YUMEAI_CHAT_SUMMARY"}
+_out_sum = _subprocess.run(
+    [sys.executable, "-c", "from yumeai.core.config import CHAT_SUMMARY as s; print(s)"],
+    capture_output=True, text=True, env=_env_sum, cwd=_os.path.dirname(_os.path.abspath(__file__)),
+    check=False,
+)
+check("tóm tắt hội thoại mặc định TẮT (như env.example/RUNBOOK, D29)", _out_sum.stdout.strip(), "False")
 
 for name, want in [
     ("llama3.2:1b", True), ("qwen2.5:0.5b", True), ("qwen2.5:1.5b", True),

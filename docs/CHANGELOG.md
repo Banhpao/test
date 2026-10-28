@@ -12,6 +12,8 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ## 2026-10-28
 
+- Tắt tóm tắt hội thoại mặc định (D29): `YUMEAI_CHAT_SUMMARY=0` trong `config.py`, `env.example`, RUNBOOK; tắt thì không gọi LLM, không dùng bản đã lưu, chỉ đọc cửa sổ gần. Trích fact giải thích `current_event`/`promise` (giữ mốc thời gian), ghi đủ mọi điều trong một câu, mỗi điều một lần vào khoá cụ thể nhất; code bỏ fact ở `likes`/`family` trùng fact cụ thể hơn trong cùng lô. Fact `current_event`/`promise` đưa vào prompt kèm ngày ghi và dòng "Hôm nay là …". Test: `test_memory.py` 31, `test_chat_context.py` 19 (bật tóm tắt cho cả module, thêm test mặc định tắt), `test_api_storage.py` bật tóm tắt trong test cache, `test_router.py` kiểm mặc định tắt.
+- Chạy lại kịch bản lần hai (TESTLOG 28/10 tối): bước dựng ngữ cảnh ≤ 0,05 s mỗi lượt (trước có lượt 58 s), `reloads` 2/20 (trước 4/21); chuyện công tác Sài Gòn thành fact.
 - Chạy lại kịch bản "Tuấn" của 27/10 trên dữ liệu riêng (`_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd` mở app với `YUMEAI_DATA_DIR` = `project\data\thu-lai\<ngày-giờ>`, không đụng DB thật): kết quả ở TESTLOG 28/10. Trích fact 8/8 và 6/6 đúng (27/10: 6/13, 5/7); lỗi 2, 3, 4 hết; ảnh có câu kèm, không còn `1pao`.
 - Sửa thêm sau lần chạy lại (D28): tóm tắt hội thoại chỉ giữ dòng dựng từ lời người dùng (`ground_summary()`, áp cả bản đã lưu); `/api/chat` lọc emoji trên luồng token (`strip_emoji()`); ảnh nhân vật bỏ tag tóc/mắt/mặt model tự thêm (`drop_look_tags()`). Test: `test_chat_context.py` 18 (bộ tóm tắt giả nay trả câu người dùng và được đặt lại mỗi test), `test_memory.py` 22, `test_router.py` thêm 3 kiểm.
 - Commit `7446196` (6 lỗi 27/10) đã đẩy lên `review-fixes`; 14 test Paocake + ComfyUI đạt trên máy trước khi commit.

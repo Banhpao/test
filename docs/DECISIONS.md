@@ -837,3 +837,32 @@ lần chạy lại có một lượt chờ 58 s chỉ ở bước dựng ngữ c
 Fact (D25) đã mang đủ thông tin người dùng. Lựa chọn: (a) tắt tóm tắt mặc định (`YUMEAI_CHAT_SUMMARY=0`);
 (b) tóm tắt bằng chính model chat (`YUMEAI_TRANSLATE_MODEL=qwen3:4b-instruct`, cần đo chất lượng dịch prompt
 ảnh); (c) chuyển tóm tắt sang chạy nền như trích fact.
+
+## D29 — Tắt tóm tắt hội thoại mặc định; fact ghi đủ, không trùng, có ngày
+**Ngày:** 2026-10-28 · **Trạng thái:** đã làm (chủ dự án chọn phương án (a) trong D28 "Chưa quyết")
+
+**Bối cảnh.** D28 để ngỏ bước tóm tắt hội thoại: chạy đồng bộ trước câu trả lời, đổi model trên GPU 4 GB
+(một lượt chờ 58 s), và cả hai bản tóm tắt của lần chạy lại đều là chuyện của nhân vật nên bị lọc sạch.
+Fact (D25) đã mang đủ thông tin về người dùng. Cái giá của việc tắt: chuyện cũ hơn cửa sổ 12 tin mà không
+thành fact sẽ bị quên — đúng 28/10, "mai đi công tác Sài Gòn" không thành fact.
+
+**Quyết định.**
+- `YUMEAI_CHAT_SUMMARY` mặc định `0` (`config.py`, `env.example`, RUNBOOK). Tắt thì không gọi LLM tóm tắt,
+  không dùng bản tóm tắt đã lưu trong DB, và chỉ đọc đúng cửa sổ gần (`history_load_limit`). Bật lại bằng
+  `YUMEAI_CHAT_SUMMARY=1` — toàn bộ đường tóm tắt (D13, D28) vẫn giữ và vẫn có test. Gradio dùng chung cấu hình
+  nên cũng tắt; `app_gradio.py` không đổi.
+- Bù phần mất bằng fact: prompt trích fact giải thích `current_event` (việc đang hoặc sắp xảy ra, giữ nguyên mốc
+  thời gian người dùng nói) và `promise`, có ví dụ. Khi đưa vào prompt chat, hai khoá này kèm ngày ghi và một
+  dòng "Hôm nay là …" để nhân vật biết "mai" là mai của hôm nào.
+- Chạy lại cho thấy lô đầu của Pao ghi con chó vào cả `family` lẫn `pet`, cà phê vào cả `likes` lẫn
+  `favorite_food_drink`, mà bỏ sót `home_city` → Pao trả lời "ở Sài Gòn". Prompt dặn thêm: một câu có thể chứa
+  nhiều điều, ghi đủ; mỗi điều một lần, vào khoá cụ thể nhất (ví dụ "Mình là Lan, giáo viên ở Huế"). Code bỏ
+  fact ở khoá chung (`likes`, `family`) nếu trùng một fact cụ thể hơn trong cùng lô. Kiểm lại ngay trên máy:
+  lô đầu 6/6 đúng, có "Nơi sống", không trùng (một lần chạy).
+
+**Đã loại.**
+- **(b) Tóm tắt bằng model chat:** vẫn bắt người dùng chờ (qwen3 ~15–19 token/giây, 15–20 s mỗi lần) và cùng
+  biến đổi luôn model viết prompt ảnh, chưa đo.
+- **(c) Chạy nền:** thêm code mà kết quả vẫn bị lọc gần hết, và vẫn tranh GPU với lượt chat kế tiếp (trích
+  fact chạy nền đã làm một lượt chờ 18 s, xem TESTLOG 28/10 tối).
+- **Gộp fact trùng trên DB** (khác lô): chưa làm; bộ lọc chỉ xét trong một lô.

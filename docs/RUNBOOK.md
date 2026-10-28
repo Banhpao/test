@@ -55,7 +55,7 @@ Model cần có:
 | Vai trò | Model | Ghi chú |
 |---|---|---|
 | Chat | `qwen3:4b-instruct` (mặc định, D24) | `qwen2.5:3b` nhanh hơn ~4 lần trên GPU 4 GB nhưng giữ vai kém hơn; `llama3.2:1b` quá nhỏ, app sẽ cảnh báo |
-| Dịch VI→EN, tóm tắt trí nhớ | `qwen2.5:3b` | tự dò, ưu tiên qwen2.5; ép bằng `YUMEAI_TRANSLATE_MODEL` |
+| Dịch VI→EN (và tóm tắt hội thoại nếu bật) | `qwen2.5:3b` | tự dò, ưu tiên qwen2.5; ép bằng `YUMEAI_TRANSLATE_MODEL` |
 | Vision | `qwen2.5vl` | mô tả ảnh cho pipeline đổi đồ — **chưa có** trong Ollama trên ổ rời (MAY.md) |
 
 ### 2. ComfyUI — BẮT BUỘC nếu muốn có ảnh
@@ -240,7 +240,7 @@ PowerShell (Windows):
 $env:OLLAMA_MODEL="qwen3:4b-instruct"   # model chat (mặc định, D24); "qwen2.5:3b" nếu cần nhanh
 $env:YUMEAI_CHAT_NUM_CTX="4096"         # context window; hạ 2048 nếu thiếu RAM
 $env:YUMEAI_CHAT_HISTORY_MAX="12"       # số lượt giữ trong cửa sổ
-$env:YUMEAI_CHAT_SUMMARY="1"            # trí nhớ dài; "0" để tắt
+$env:YUMEAI_CHAT_SUMMARY="0"            # tóm tắt hội thoại cũ vào prompt; mặc định tắt (D29), "1" để bật
 $env:YUMEAI_CHAT_FEWSHOT="1"            # few-shot giữ vai; "0" để tiết kiệm context
 $env:YUMEAI_COMFY_TIMEOUT_SEC="1800"    # timeout một job ComfyUI
 $env:YUMEAI_LOW_VRAM_MODE="1"           # "0" khi có GPU mạnh (bỏ cap steps)

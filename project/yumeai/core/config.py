@@ -127,9 +127,12 @@ CHAT_NUM_PREDICT = int(os.getenv("YUMEAI_CHAT_NUM_PREDICT", "220"))
 # Tắt nếu muốn tiết kiệm context: $env:YUMEAI_CHAT_FEWSHOT="0"
 CHAT_FEWSHOT = os.getenv("YUMEAI_CHAT_FEWSHOT", "1").strip().lower() not in {"0", "false", "off", "no"}
 
-# Trí nhớ dài: nén các lượt đã rơi ra khỏi cửa sổ lịch sử thành vài gạch đầu dòng
-# rồi nhét vào system prompt. Đây là thứ tạo cảm giác "nhân vật nhớ mình".
-CHAT_SUMMARY = os.getenv("YUMEAI_CHAT_SUMMARY", "1").strip().lower() not in {"0", "false", "off", "no"}
+# Tóm tắt hội thoại: nén các lượt đã rơi ra khỏi cửa sổ lịch sử thành vài gạch đầu
+# dòng rồi nhét vào system prompt. MẶC ĐỊNH TẮT từ 28/10 (D29): chạy đồng bộ trước câu
+# trả lời và đổi model trên GPU 4 GB (một lượt chờ 58 s), mà cả hai bản tóm tắt của lần
+# chạy lại đều là chuyện của nhân vật, bị D28 lọc sạch. Điều cần nhớ về người dùng đã
+# nằm ở memory_facts (D25). Bật lại: $env:YUMEAI_CHAT_SUMMARY="1".
+CHAT_SUMMARY = os.getenv("YUMEAI_CHAT_SUMMARY", "0").strip().lower() not in {"0", "false", "off", "no"}
 # Cứ thêm bấy nhiêu message bị đẩy ra ngoài cửa sổ thì mới tóm tắt lại một lần
 # (tóm tắt mỗi lượt sẽ tốn thêm một lời gọi LLM cho mỗi tin nhắn).
 CHAT_SUMMARY_EVERY = int(os.getenv("YUMEAI_CHAT_SUMMARY_EVERY", "6"))

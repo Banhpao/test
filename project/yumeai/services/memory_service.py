@@ -8,6 +8,7 @@ LLM chỉ đề xuất fact có cấu trúc, repository quyết định dữ li�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import re
 import threading
@@ -15,7 +16,7 @@ import time
 
 import httpx
 
-from yumeai.core.chat_context import clean_history, summarize_old_history
+from yumeai.core.chat_context import clean_history, summarize_old_history, summary_enabled
 from yumeai.core.personas import PERSONAS
 from yumeai.core.config import (
     CHAT_NUM_CTX,
@@ -249,6 +250,21 @@ def ground_summary(summary: str, user_texts: list[str], persona_name: str = "") 
     return "\n".join(kept)
 
 
+# Khoá chung: dễ bị model ghi lại đúng điều đã có ở một khoá cụ thể hơn. Chạy lại 28/10:
+# "family: có nuôi một con chó tên là Bơ" cạnh "pet: chó tên Bơ", "likes: cà phê sữa đá"
+# cạnh "favorite_food_drink: cà phê sữa đá" — trong khi "Nơi sống" bị bỏ sót.
+_GENERIC_KEYS = {"likes", "family"}
+_SAME_THING_OVERLAP = 0.8
+
+
+def _same_thing(a: str, b: str) -> bool:
+    """Hai giá trị nói cùng một điều: từ có nghĩa của bên NGẮN hơn gần như nằm trọn trong bên kia."""
+    wa, wb = _content_words(a), _content_words(b)
+    if not wa or not wb:
+        return False
+    return len(wa & wb) / min(len(wa), len(wb)) >= _SAME_THING_OVERLAP
+
+
 def parse_memory_response(raw: str, user_texts: list[str] | None = None,
                           persona_name: str = "") -> MemoryExtractionResult:
     """Parse JSON bảo thủ; response sai format thì không đánh dấu đã xử lý.
@@ -277,7 +293,14 @@ def parse_memory_response(raw: str, user_texts: list[str] | None = None,
 
     facts = []
     seen = set()
-    for item in candidates[:MAX_FACTS_PER_BATCH]:
+    # Khoá chung xét SAU khoá cụ thể, để bản trùng ("likes: cà phê sữa đá" khi đã có
+    # "favorite_food_drink: cà phê sữa đá") bị bỏ chứ không chiếm chỗ (D29).
+    candidates = sorted(
+        candidates[:MAX_FACTS_PER_BATCH],
+        key=lambda item: _canonical_key(str(item.get("key", ""))) in _GENERIC_KEYS
+        if isinstance(item, dict) else True,
+    )
+    for item in candidates:
         if not isinstance(item, dict):
             continue
         key = _canonical_key(str(item.get("key", "")))
@@ -288,6 +311,9 @@ def parse_memory_response(raw: str, user_texts: list[str] | None = None,
             value, str(item.get("evidence", "") or ""), user_texts, persona_name
         ):
             print(f"🧠 Bỏ fact không có trong lời người dùng: {key} = {value!r}")
+            continue
+        if key in _GENERIC_KEYS and any(_same_thing(value, f["value"]) for f in facts):
+            print(f"🧠 Bỏ fact trùng với fact cụ thể hơn: {key} = {value!r}")
             continue
         try:
             confidence = float(item.get("confidence", 0.8))
@@ -370,6 +396,18 @@ Không lưu mật khẩu, mã OTP, API key, tài khoản ngân hàng, giấy t�
 Chỉ dùng các khoá sau:
 {keys}
 "boundary" chỉ khi người dùng NÓI THẲNG là không muốn nhắc tới điều gì.
+"current_event": việc đang hoặc sắp xảy ra trong đời NGƯỜI DÙNG — đi công tác, ốm, thi, chuyển nhà,
+dự án đang làm... Giữ nguyên mốc thời gian họ nói ("mai", "tuần sau", "vài hôm").
+"promise": điều người dùng hứa hoặc hẹn ("tối mai mình kể tiếp", "về sẽ mua quà").
+
+Một câu có thể chứa nhiều điều — ghi ĐỦ từng điều, mỗi điều một khoá.
+Mỗi điều chỉ ghi MỘT lần, vào khoá cụ thể nhất: con vật nuôi → "pet" (không ghi lại ở "family"),
+món/đồ uống yêu thích → "favorite_food_drink" (không ghi lại ở "likes").
+
+Ví dụ 1: NGƯỜI DÙNG: "Mình là Lan, giáo viên ở Huế."
+→ {{"key":"name","value":"Lan",...}}, {{"key":"occupation","value":"giáo viên",...}}, {{"key":"home_city","value":"Huế",...}}
+Ví dụ 2: NGƯỜI DÙNG: "Tuần sau mình phải đi Hà Nội họp, chắc bận lắm."
+→ {{"key":"current_event","value":"tuần sau đi Hà Nội họp, sẽ bận","evidence":"Tuần sau mình phải đi Hà Nội họp, chắc bận lắm.","confidence":0.9}}
 
 Trả về JSON đúng dạng:
 {{"facts":[{{"key":"một khoá ở trên","value":"giá trị ngắn bằng tiếng Việt","evidence":"chép nguyên văn câu người dùng làm bằng chứng","confidence":0.0}}]}}
@@ -427,15 +465,43 @@ def extract_memory_facts(messages: list[dict], persona_name: str = "") -> Memory
     return parse_memory_response(raw, user_texts, persona_name)
 
 
-def format_memory_context(facts: list[dict]) -> str:
-    """Dạng ngắn đưa vào system prompt, giới hạn để model nhỏ không tràn context."""
+# Fact có mốc thời gian ("mai đi công tác") cần biết GHI KHI NÀO thì mới hiểu được (D29).
+_DATED_KEYS = {"current_event", "promise"}
+
+
+def _local_day(iso_text) -> str:
+    """'2026-10-28T11:08:23+00:00' → '28/10/2026' theo giờ máy. Không đọc được thì ''."""
+    try:
+        moment = datetime.fromisoformat(str(iso_text).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().strftime("%d/%m/%Y")
+
+
+def format_memory_context(facts: list[dict], today: str | None = None) -> str:
+    """Dạng ngắn đưa vào system prompt, giới hạn để model nhỏ không tràn context.
+
+    Chuyện đang diễn ra và lời hứa kèm ngày ghi, và khi có chúng thì thêm một dòng
+    "hôm nay" — "mai đi công tác Sài Gòn" ghi từ ba hôm trước là chuyện đã qua.
+    `today` chỉ để test truyền vào; mặc định là ngày của máy.
+    """
     lines = []
+    dated = False
     for fact in facts[:24]:
         key = str(fact.get("fact_key", fact.get("key", ""))).strip()
         value = str(fact.get("fact_value", fact.get("value", ""))).strip()
         if key and value:
             # Nhãn tiếng Việt cho khoá chuẩn; khoá người dùng tự đặt giữ nguyên.
-            lines.append(f"- {FACT_KEYS.get(key, key)}: {value}")
+            label = FACT_KEYS.get(key, key)
+            day = _local_day(fact.get("updated_at")) if key in _DATED_KEYS else ""
+            if day:
+                label = f"{label} (ghi ngày {day})"
+                dated = True
+            lines.append(f"- {label}: {value}")
+    if dated:
+        lines.append(f"(Hôm nay là {today or datetime.now().astimezone().strftime('%d/%m/%Y')}.)")
     return "\n".join(lines)
 
 
@@ -457,6 +523,11 @@ def build_conversation_memory(
         conversation["user_id"], conversation["character_id"]
     )
     fact_context = format_memory_context(facts)
+
+    # Tóm tắt tắt (mặc định từ D29) thì cũng không dùng bản đã lưu: nó không còn được
+    # cập nhật nữa, và điều cần nhớ về người dùng đã nằm ở fact.
+    if not summary_enabled():
+        return fact_context
 
     # Lọc cả bản vừa tính lẫn bản đã lưu: bản lưu trước 28/10 có thể còn dòng sai.
     user_texts = [item["content"] for item in clean_history(history) if item["role"] == "user"]

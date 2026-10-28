@@ -148,6 +148,11 @@ def chat_options(temperature: float = None, num_predict: int = None) -> dict:
     })
 
 
+def summary_enabled() -> bool:
+    """Tóm tắt hội thoại có bật không (YUMEAI_CHAT_SUMMARY, mặc định tắt — D29)."""
+    return CHAT_SUMMARY
+
+
 def history_load_limit(total_messages: int):
     """Số text message CUỐI cần đọc từ DB để dựng ngữ cảnh y hệt như khi đọc cả hội thoại.
 

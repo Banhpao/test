@@ -12,6 +12,42 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
+## 2026-10-28 (tối) — RTX 3050 Laptop 4 GB — chạy lại lần hai: tóm tắt tắt mặc định (D29)
+
+**Cấu hình chạy**
+- Code ở commit `3248dd4` + phần đầu D29 (tóm tắt tắt, prompt `current_event`/`promise`, ngày ghi). Như các lần trước:
+  `qwen3:4b-instruct`, ComfyUI `--lowvram`, "Tốt nhất (50 steps)". Dữ liệu riêng `project\data\thu-lai\20261028-233230\`.
+- Đúng 14 câu Pao + 1 câu xin ảnh Pao + 7 câu Su như lần sáng, gửi qua `send()` của `/app`.
+- Sau đó sửa phần cuối D29 (ghi đủ, không trùng) và kiểm riêng 6 câu đầu của Pao trên dữ liệu mới (`thu-lai\` lần thứ ba).
+
+| Hạng mục | 28/10 sáng | 28/10 tối |
+|---|---|---|
+| Dựng ngữ cảnh mỗi lượt | có lượt 58 s (tóm tắt) | **≤ 0,05 s mọi lượt** |
+| `reloads` | 4/21 | **2/20** (khởi động lạnh; lượt đầu của Su sau khi vẽ ảnh) |
+| Cả lượt chat | trung vị 3,7 s | trung vị 3,7 s; chữ đầu 0,49 s; 18,8 token/giây |
+| Fact Pao | 8/8, thiếu chuyện Sài Gòn | 7 đúng: **có "mai đi công tác Sài Gòn, sẽ vắng vài hôm"**; 2 cặp trùng (`family`/`pet`, `likes`/`favorite_food_drink`); **thiếu `home_city`** |
+| Fact Su | 6/6 | 5/5 đúng, không trùng |
+| Lô hai của Pao bị bộ lọc bỏ | — | 6 fact: `home_city = 'Sài Gòn'` (sai), `likes = 'uống cà phê đen, ngủ'` (của Pao), `boundary = 'không nhắc tới Pao là AI'`, `name`/`occupation` (đúng nhưng lô hai chỉ có câu hỏi về chúng) và một bản `current_event` thứ hai về chuyến Sài Gòn |
+| Pao nhớ tên/nghề/nơi | "Mình tên Minh" | "Tuấn, kỹ sư điện tử, **Sài Gòn**" — nơi sai vì thiếu fact `home_city` |
+| Pao nhớ đồ uống/con chó | đúng | đúng |
+| Emoji / "B-boys" | 2 câu / 0 | 0 / 0 |
+| Pao xưng "Mình" | 2 câu | 1 câu ("Mình chỉ biết uống cà phê đen…") |
+| Câu dụ AI | Pao "Không ai biết tao là AI cả" | Pao "không ai nói tao là AI cả…" (vẫn né, chưa nhận); Su "Em là người" |
+| Su bị dụ liệt kê | gạch đầu dòng | không liệt kê |
+| Ảnh Pao | ngồi cạnh giá vẽ | ngồi cạnh giá vẽ, khung cắt mất mặt; prompt không còn tag tóc |
+| Ảnh Su | đang viết | đang viết vào sổ bên cửa sổ |
+
+**Kiểm riêng sau phần cuối D29** (6 câu đầu của Pao, lô trích fact đầu): **6/6 đúng, có `home_city: Đà Nẵng`,
+không trùng**, log không có dòng bỏ fact trùng nào — lần này chính prompt đã đủ. Một lần chạy là một mẫu.
+
+**Số đo khác:** câu 7 của Pao chờ chữ đầu 18,6 s mà không nạp model — lô trích fact chạy nền ngay trước đó chiếm
+Ollama (lần sáng: 11 s ở đúng chỗ này). Ảnh 88 s và 62 s (ComfyUI 82 và 52 s).
+
+**Còn lại:** trích fact chạy nền chặn lượt kế tiếp; ảnh Pao chưa thấy đang vẽ và khung cắt mặt; câu trả lời câu dụ
+AI của Pao còn hở; cần nhiều lượt chạy để biết tỷ lệ fact thiếu/trùng thật.
+
+---
+
 ## 2026-10-28 — NVIDIA GeForce RTX 3050 Laptop GPU 4 GB, RAM 31.7 GiB — chạy lại kịch bản 27/10 sau khi sửa 6 lỗi (D25–D27)
 
 **Cấu hình chạy**

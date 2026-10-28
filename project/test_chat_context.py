@@ -12,6 +12,7 @@ import sys
 import tempfile
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -47,8 +48,21 @@ from yumeai.core.config import (  # noqa: E402
     CHAT_SUMMARY_EVERY,
     CHAT_SUMMARY_MAX_MESSAGES,
 )
+from yumeai.core import chat_context as _chat_context  # noqa: E402
 from yumeai.services.memory_service import build_conversation_memory  # noqa: E402
 from yumeai.storage import YumeDatabase  # noqa: E402
+
+# Tóm tắt hội thoại mặc định TẮT từ D29. File này kiểm chính đường tóm tắt (cache, cửa sổ,
+# lọc dòng sai), nên bật nó cho cả module; SummaryOffTests kiểm hành vi mặc định.
+_SUMMARY_PATCH = unittest.mock.patch.object(_chat_context, "CHAT_SUMMARY", True)
+
+
+def setUpModule():
+    _SUMMARY_PATCH.start()
+
+
+def tearDownModule():
+    _SUMMARY_PATCH.stop()
 
 TEST_PERSONAS = {"pao": {"name": "Pao"}, "su": {"name": "Su"}}
 
@@ -318,6 +332,35 @@ class SharedMemoryContextTests(unittest.TestCase):
         su_conv = self.db.get_or_create_conversation("user_001", "su")
         memory = build_conversation_memory(self.db, su_conv, _history(2), "Su")
         self.assertNotIn("bi_mat", memory)
+
+
+class SummaryOffTests(unittest.TestCase):
+    """D29: tóm tắt mặc định tắt — không gọi LLM, không dùng bản đã lưu, chỉ còn fact."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = YumeDatabase(Path(self.tmp.name) / "yumeai.db")
+        self.db.initialize(TEST_PERSONAS)
+        self.conv = self.db.get_or_create_conversation("user_001", "pao")
+        FAKE.summarize_conversation = _DEFAULT_SUMMARIZE
+        clear_memory_cache()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_off_means_only_facts_and_no_llm_call(self):
+        self.db.upsert_memory_fact("user_001", "pao", "name", "Tuấn")
+        self.db.update_memory_summary(self.conv["id"], "- câu hỏi số 1")
+        reloaded = self.db.get_conversation(self.conv["id"])
+        CALLS.clear()
+        long_history = _history((CHAT_HISTORY_MAX_MESSAGES + CHAT_SUMMARY_EVERY * 2) // 2)
+        with unittest.mock.patch.object(_chat_context, "CHAT_SUMMARY", False):
+            memory = build_conversation_memory(self.db, reloaded, long_history, "Pao")
+            limit = history_load_limit(500)
+        self.assertEqual(memory, "- Tên: Tuấn")
+        self.assertEqual(CALLS, [])
+        # Không tóm tắt thì chỉ cần đọc đúng cửa sổ gần, không đọc thêm cửa sổ tóm tắt.
+        self.assertEqual(limit, CHAT_HISTORY_MAX_MESSAGES)
 
 
 if __name__ == "__main__":

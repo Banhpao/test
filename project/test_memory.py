@@ -370,6 +370,70 @@ class SummaryGroundingTests(unittest.TestCase):
         )
 
 
+class EventFactTests(unittest.TestCase):
+    """D29: chạy lại 28/10, "Mai mình phải đi công tác Sài Gòn rồi, chắc vắng vài hôm." không
+    thành fact — lô đó chỉ có đúng câu này là lời khẳng định của người dùng."""
+
+    def test_prompt_explains_event_and_promise_keys(self):
+        prompt = memory_service._extraction_prompt("Pao")
+        self.assertIn('"current_event": việc đang hoặc sắp xảy ra', prompt)
+        self.assertIn('"promise":', prompt)
+        self.assertIn("Giữ nguyên mốc thời gian", prompt)
+
+    def test_trip_fact_passes_grounding(self):
+        raw = _facts_json([("current_event", "mai đi công tác Sài Gòn vài hôm",
+                            "Mai mình phải đi công tác Sài Gòn rồi, chắc vắng vài hôm.")])
+        result = parse_memory_response(raw, TUAN_LINES, "Pao")
+        self.assertEqual([(f["key"], f["value"]) for f in result.facts],
+                         [("current_event", "mai đi công tác Sài Gòn vài hôm")])
+
+    def test_example_in_prompt_cannot_leak_as_a_fact(self):
+        # Model nhỏ hay chép luôn ví dụ trong prompt; người dùng chưa từng nói câu đó.
+        raw = _facts_json([("current_event", "tuần sau đi Hà Nội họp, sẽ bận",
+                            "Tuần sau mình phải đi Hà Nội họp, chắc bận lắm.")])
+        self.assertEqual(parse_memory_response(raw, TUAN_LINES, "Pao").facts, [])
+
+    def test_prompt_asks_for_every_fact_in_a_sentence_and_no_duplicates(self):
+        prompt = memory_service._extraction_prompt("Pao")
+        self.assertIn("Một câu có thể chứa nhiều điều", prompt)
+        self.assertIn('con vật nuôi → "pet"', prompt)
+
+    def test_generic_duplicates_are_dropped_and_do_not_crowd_out(self):
+        # Đúng lô đầu của lần chạy lại 28/10 (tối): model ghi con chó và cà phê hai lần.
+        raw = _facts_json([
+            ("name", "Tuấn", ""), ("occupation", "kỹ sư điện tử", ""),
+            ("likes", "cà phê sữa đá", ""), ("family", "có nuôi một con chó tên là Bơ", ""),
+            ("favorite_food_drink", "cà phê sữa đá", ""), ("pet", "chó tên Bơ", ""),
+            ("home_city", "Đà Nẵng", ""),
+        ])
+        keys = [f["key"] for f in parse_memory_response(raw, TUAN_LINES, "Pao").facts]
+        self.assertEqual(keys, ["name", "occupation", "favorite_food_drink", "pet", "home_city"])
+
+    def test_generic_fact_about_something_else_is_kept(self):
+        raw = _facts_json([("favorite_food_drink", "cà phê sữa đá", ""),
+                           ("likes", "sửa mạch cả ngày", "")])
+        keys = [f["key"] for f in parse_memory_response(raw, TUAN_LINES, "Pao").facts]
+        self.assertEqual(keys, ["favorite_food_drink", "likes"])
+
+    def test_examples_in_prompt_cannot_leak_as_facts(self):
+        raw = _facts_json([("name", "Lan", ""), ("home_city", "Huế", ""), ("occupation", "giáo viên", "")])
+        self.assertEqual(parse_memory_response(raw, TUAN_LINES, "Pao").facts, [])
+
+    def test_events_carry_the_day_they_were_recorded(self):
+        context = format_memory_context([
+            {"fact_key": "name", "fact_value": "Tuấn", "updated_at": "2026-10-28T01:39:35+00:00"},
+            {"fact_key": "current_event", "fact_value": "mai đi công tác Sài Gòn vài hôm",
+             "updated_at": "2026-10-28T01:39:35+00:00"},
+        ], today="30/10/2026")
+        lines = context.splitlines()
+        self.assertEqual(lines[0], "- Tên: Tuấn")
+        self.assertRegex(lines[1], r"^- Chuyện đang diễn ra \(ghi ngày \d\d/10/2026\): mai đi công tác Sài Gòn vài hôm$")
+        self.assertEqual(lines[2], "(Hôm nay là 30/10/2026.)")
+
+    def test_no_dated_fact_means_no_today_line(self):
+        self.assertEqual(format_memory_context([{"fact_key": "name", "fact_value": "Tuấn"}]), "- Tên: Tuấn")
+
+
 class SummaryPromptTests(unittest.TestCase):
     def test_summary_names_the_character_and_drops_empty_lines(self):
         from yumeai.services import ollama_service

@@ -123,7 +123,7 @@ LLM từ không giới hạn → tối đa 40 message.
 
 | Vấn đề | Chi tiết |
 |---|---|
-| **Trích fact lẫn nhân vật với người dùng** | **Fact: đã sửa (D25) và xác nhận khi chạy lại 28/10 — 8/8 và 6/6 đúng. Tóm tắt hội thoại vẫn sai → lọc thêm (D28), chờ chạy lại; nên quyết có giữ bước tóm tắt không (D28 "Chưa quyết").** Dùng thật 27/10 (TESTLOG): Pao lưu 13 fact, chỉ 6 đúng về người dùng; 7 là chuyện của chính Pao hoặc suy diễn sai, có `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó; thiếu con chó. Fact sai được đưa lại vào prompt. Tóm tắt hội thoại cũng lẫn ("Tên: Pao"). Hỏng trụ 2 — sửa trước khi đánh giá memory tiếp. |
+| **Trích fact lẫn nhân vật với người dùng** | **Đã sửa: fact (D25, xác nhận 28/10), tóm tắt hội thoại sai nên tắt mặc định (D29); fact ghi đủ, không trùng (D29, mới kiểm một lần — cần thêm lượt chạy).** Dùng thật 27/10 (TESTLOG): Pao lưu 13 fact, chỉ 6 đúng về người dùng; 7 là chuyện của chính Pao hoặc suy diễn sai, có `boundary: không muốn nhắc đến việc nuôi chó hoặc mèo` trong khi người dùng nuôi chó; thiếu con chó. Fact sai được đưa lại vào prompt. Tóm tắt hội thoại cũng lẫn ("Tên: Pao"). Hỏng trụ 2 — sửa trước khi đánh giá memory tiếp. |
 | **Chưa có relevance retrieval** | Fact extraction đã chạy, nhưng hiện đưa tối đa 24 fact gần nhất vào prompt. Chỉ cần FTS5/embedding khi dữ liệu thực tế đủ lớn để benchmark. |
 | **Character consistency chưa đủ** | Appearance tag chưa khoá được đúng một khuôn mặt. Cần ảnh gốc + seed/preset IP-Adapter trước; LoRA cần GPU rời. |
 | **Chưa có authentication** | Dữ liệu phân tách bằng `user_id`, nhưng đây chưa phải đăng nhập. An toàn khi chỉ bind localhost; không được mở Internet như hiện tại. |
@@ -135,11 +135,13 @@ LLM từ không giới hạn → tối đa 40 message.
 | `app_gradio.py` là khối ~3800 dòng | Pipeline ảnh dính Gradio; REST mới dùng chung chat + text2img, chưa dùng được các edit pipeline nâng cao. |
 | VRAM handoff (D16) chưa đo thật | Nhả Ollama trước job ComfyUI và `/free` trước vision mới kiểm bằng test giả; cần một lượt chạy trên RTX 3050 — `bench_baseline.py --warm-ollama` đo đúng bước này (việc 0). |
 | Chưa có migration runner | Schema hiện ở v3, migrate bằng cách kiểm `PRAGMA table_info` rồi `ALTER TABLE` — idempotent và đã có test v1→v2→v3, nhưng vẫn chưa phải runner tuần tự thật. |
-| Tóm tắt dùng cửa sổ trôi | Sau ~40 message overflow, fact từ đầu hội thoại rơi khỏi tóm tắt (D13). Đường bền vững là `memory_facts` — nay đã có ở **cả hai** cửa vào (D15). Làm đúng hẳn cần tóm tắt cuộn (summary cũ + phần mới → summary mới). |
+| Tóm tắt dùng cửa sổ trôi | **Tóm tắt mặc định tắt từ D29** — chỉ còn liên quan khi bật `YUMEAI_CHAT_SUMMARY=1`. Sau ~40 message overflow, fact từ đầu hội thoại rơi khỏi tóm tắt (D13). Đường bền vững là `memory_facts` — nay đã có ở **cả hai** cửa vào (D15). Làm đúng hẳn cần tóm tắt cuộn (summary cũ + phần mới → summary mới). |
 | Ảnh từ Gradio chưa vào gallery | Bảng `images` mới chỉ được ghi ở đường REST. Cần hook ở `runtime.run_comfy_job` — điểm nghẽn duy nhất mà cả 8 chỗ gọi đều đi qua (D15). |
 | Chưa test ảnh tự động | Test mới phủ storage/API; ComfyUI workflow vẫn cần service/model thật. |
 | `ComfyUI/` không trong git | 93GB model + custom nodes phải copy/cài riêng khi chuyển máy. |
 | Video Wan 2.2 5B mới chuẩn bị | 3 file Comfy-Org đã tải, đối chiếu SHA-256, ComfyUI nhận model/node; có workflow mẫu và bản thử 512x288, 17 khung hình trong `ComfyUI/user/default/workflows`. **Chưa sinh video lần nào**, chưa tích hợp vào YumeAI (D17). Muốn giữ đủ bộ model và làm cấu hình cho nhiều loại máy ở bước sau. Chi tiết: `E:/Python/WAN22_YUMEAI.md`, `E:/Python/manifests/wan22-5b.json`. |
+| Trích fact chạy nền chặn lượt chat kế tiếp | Ollama làm tuần tự: lượt chat ngay sau lô trích fact chờ 11–20 s (TESTLOG 28/10). Cân nhắc trích khi người dùng đang gõ, hoặc lô nhỏ hơn. |
+| Ảnh Pao chưa thấy đang vẽ | Hai lần chạy lại: ngồi cạnh giá vẽ, khung hình cắt mất mặt (D27 mới sửa tên, bối cảnh, tóc). Cần dặn khung hình và tư thế khi vẽ nhân vật. |
 | Chưa có model vision trên ổ rời | Pipeline đổi đồ cần `qwen2.5vl` (RUNBOOK); Ollama trên ổ rời mới có `qwen3:4b-instruct` và `qwen2.5:3b`. Chỉ ảnh hưởng Gradio (pipeline ảnh nâng cao). |
 
 ---
@@ -162,7 +164,9 @@ fact gần nhất làm prompt nhiễu hoặc bỏ sót fact liên quan.
 Lượt đầu đã chạy 27/10 (19 lượt chat, TESTLOG): Pao 6/13 fact đúng, Su 5/7. Đã sửa cùng ngày: trích fact chỉ giữ điều
 người dùng tự nói, bộ khoá cố định, tóm tắt gọi đúng tên hai người (D25); kèm 5 lỗi còn lại của lượt đó (D26, D27, `/app`).
 Chạy lại 28/10 (TESTLOG): fact 8/8 (Pao) và 6/6 (Su) đúng, có con chó; tóm tắt vẫn sai và một lượt chờ 58 s vì nó → D28.
-Việc kế tiếp: quyết bước tóm tắt (D28: tắt / dùng model chat / chạy nền), rồi chạy lại bằng `_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd`.
+Tối 28/10 tắt tóm tắt, fact ghi thêm chuyện đang diễn ra, ghi đủ và không trùng (D29): hết lượt chờ 58 s; lô đầu Pao 6/6.
+Việc kế tiếp: chạy kịch bản nhiều lần (mỗi lần mới là một mẫu) bằng `_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd` để đo tỷ lệ
+fact đúng/thiếu/trùng cho chắc, rồi mới tính FTS5/embedding.
 
 ### 2. Character consistency khả thi trên máy hiện tại
 
