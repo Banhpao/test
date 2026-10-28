@@ -352,6 +352,25 @@ class FactGroundingTests(unittest.TestCase):
         self.assertEqual(context.splitlines(), ["- Thú cưng: chó tên Bơ", "- tu_dat: khoá người dùng tự đặt"])
 
 
+class KnownUserNameTests(unittest.TestCase):
+    """D30: tên người dùng tự giới thiệu (fact `name`) thắng tên giao diện gửi kèm."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = YumeDatabase(Path(self.tmp.name) / "yumeai.db")
+        self.db.initialize(PERSONAS)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_known_user_name_comes_from_the_name_fact(self):
+        self.db.create_conversation("user_001", "pao")   # tạo người dùng (khoá ngoại của fact)
+        self.assertEqual(memory_service.known_user_name(self.db, "user_001", "pao"), "")
+        self.db.upsert_memory_fact("user_001", "pao", "name", "Tuấn")
+        self.assertEqual(memory_service.known_user_name(self.db, "user_001", "pao"), "Tuấn")
+        self.assertEqual(memory_service.known_user_name(self.db, "user_001", "su"), "")
+
+
 class SummaryGroundingTests(unittest.TestCase):
     """Chạy lại 28/10: tóm tắt vẫn viết chuyện của Pao dù prompt đã gọi đúng tên hai người."""
 

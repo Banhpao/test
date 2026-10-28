@@ -449,7 +449,7 @@ dialog.modal::backdrop{background:rgba(9,6,18,.78)}
       <div class="conv-list" id="conv-list" aria-label="Hội thoại đã lưu"></div>
     </div>
     <div class="side-foot">
-      <button type="button" class="me" data-action="open-data"><span class="me-av" aria-hidden="true">M</span><span class="me-text"><b id="me-name">Minh</b><small>Dữ liệu của bạn ›</small></span></button>
+      <button type="button" class="me" data-action="open-data"><span class="me-av" aria-hidden="true">B</span><span class="me-text"><b id="me-name">Bạn</b><small>Dữ liệu của bạn ›</small></span></button>
       <ul class="status" id="status" aria-label="Trạng thái dịch vụ" aria-live="polite">
         <li><span class="dot" id="st-chat-dot"></span><span id="st-chat">Trò chuyện (Ollama) · đang kiểm tra</span></li>
         <li><span class="dot" id="st-draw-dot"></span><span id="st-draw">Bộ vẽ (ComfyUI) · đang kiểm tra</span></li>
@@ -660,7 +660,10 @@ dialog.modal::backdrop{background:rgba(9,6,18,.78)}
 // ════════════════════════════════════════
 const API = location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000'
 const USER = 'user_001'
-const USER_NAME = 'Minh'
+// Tên người dùng: để trống. Bản mẫu từng ghi cứng 'Minh' và gửi kèm mỗi lượt chat, nên
+// prompt luôn nói người dùng tên Minh dù họ đã tự giới thiệu tên khác (D30). Máy chủ lấy
+// tên từ fact `name` khi người dùng tự giới thiệu.
+const USER_NAME = ''
 const LS_CONV = 'yumeai_conversation_id'
 const LS_PANEL = 'yumeai_panel_closed'
 const LS_WELCOME = 'yumeai_welcome_v1'
@@ -2062,7 +2065,7 @@ async function init() {
   fillIcons()
   bind()
   applyPanelState()
-  $('#me-name').textContent = USER_NAME
+  $('#me-name').textContent = USER_NAME || 'Bạn'
   // Lần đầu mở /app: nói rõ đây là nhân vật AI và dữ liệu nằm ở đâu (lộ trình P3.1).
   if (lsGet(LS_WELCOME) !== '1') $('#welcome').showModal()
   await checkHealth()

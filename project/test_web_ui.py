@@ -85,6 +85,12 @@ class WebUiContractTests(unittest.TestCase):
         response = TestClient(main.app).get("/app")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.text, HTML)
+        # D30: không có dòng này thì cập nhật app xong trình duyệt vẫn chạy giao diện cũ.
+        self.assertEqual(response.headers.get("cache-control"), "no-cache")
+
+    def test_ui_does_not_invent_a_user_name(self):
+        # D30: bản mẫu gửi cứng "Minh" mỗi lượt chat — nhân vật gọi sai tên người dùng.
+        self.assertIn("const USER_NAME = ''", HTML)
 
 
 if __name__ == "__main__":

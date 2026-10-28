@@ -1,6 +1,6 @@
 # Trạng thái dự án — YumeAI
 
-**Cập nhật lần cuối:** 2026-10-28 · **Nhánh:** `review-fixes` (đã đẩy lên GitHub `Banhpao/test` ngày 27/10) ·
+**Cập nhật lần cuối:** 2026-10-29 · **Nhánh:** `review-fixes` (đã đẩy lên GitHub `Banhpao/test` ngày 27/10) ·
 **Máy đang dùng:** [`MAY.md`](MAY.md)
 
 Trả lời đúng ba câu: đang chạy được gì, đang hỏng/thiếu gì, làm gì tiếp.
@@ -140,7 +140,7 @@ LLM từ không giới hạn → tối đa 40 message.
 | Chưa test ảnh tự động | Test mới phủ storage/API; ComfyUI workflow vẫn cần service/model thật. |
 | `ComfyUI/` không trong git | 93GB model + custom nodes phải copy/cài riêng khi chuyển máy. |
 | Video Wan 2.2 5B mới chuẩn bị | 3 file Comfy-Org đã tải, đối chiếu SHA-256, ComfyUI nhận model/node; có workflow mẫu và bản thử 512x288, 17 khung hình trong `ComfyUI/user/default/workflows`. **Chưa sinh video lần nào**, chưa tích hợp vào YumeAI (D17). Muốn giữ đủ bộ model và làm cấu hình cho nhiều loại máy ở bước sau. Chi tiết: `E:/Python/WAN22_YUMEAI.md`, `E:/Python/manifests/wan22-5b.json`. |
-| Trích fact chạy nền chặn lượt chat kế tiếp | Ollama làm tuần tự: lượt chat ngay sau lô trích fact chờ 11–20 s (TESTLOG 28/10). Cân nhắc trích khi người dùng đang gõ, hoặc lô nhỏ hơn. |
+| Trích fact chạy nền chặn lượt chat kế tiếp | Ollama làm tuần tự: người gõ nhanh (6 s/câu) chờ 9–16 s ở câu ngay sau mỗi lô (TESTLOG 29/10). Đã thử cho chat chen ngang và loại (D30: chỉ dời chỗ chờ, có lúc làm đói trí nhớ). Hướng còn lại: lô nhẹ hơn (ít token ra hơn), phải đo độ đúng fact. |
 | Ảnh Pao chưa thấy đang vẽ | Hai lần chạy lại: ngồi cạnh giá vẽ, khung hình cắt mất mặt (D27 mới sửa tên, bối cảnh, tóc). Cần dặn khung hình và tư thế khi vẽ nhân vật. |
 | Chưa có model vision trên ổ rời | Pipeline đổi đồ cần `qwen2.5vl` (RUNBOOK); Ollama trên ổ rời mới có `qwen3:4b-instruct` và `qwen2.5:3b`. Chỉ ảnh hưởng Gradio (pipeline ảnh nâng cao). |
 
@@ -165,8 +165,9 @@ Lượt đầu đã chạy 27/10 (19 lượt chat, TESTLOG): Pao 6/13 fact đún
 người dùng tự nói, bộ khoá cố định, tóm tắt gọi đúng tên hai người (D25); kèm 5 lỗi còn lại của lượt đó (D26, D27, `/app`).
 Chạy lại 28/10 (TESTLOG): fact 8/8 (Pao) và 6/6 (Su) đúng, có con chó; tóm tắt vẫn sai và một lượt chờ 58 s vì nó → D28.
 Tối 28/10 tắt tóm tắt, fact ghi thêm chuyện đang diễn ra, ghi đủ và không trùng (D29): hết lượt chờ 58 s; lô đầu Pao 6/6.
-Việc kế tiếp: chạy kịch bản nhiều lần (mỗi lần mới là một mẫu) bằng `_vscode\MO-PAOCAKE-DU-LIEU-THU.cmd` để đo tỷ lệ
-fact đúng/thiếu/trùng cho chắc, rồi mới tính FTS5/embedding.
+29/10 đo 4 lần trên bản cuối (TESTLOG): Pao fact 24/24, nhớ lại 20/20; Su fact 19/20, nhớ lại 12/12; không fact sai, không trùng.
+Sửa tên giả "Minh" mà `/app` gửi kèm (D30). Kịch bản này không cần FTS5/embedding (6 fact/nhân vật).
+Việc kế tiếp: thử lô trích fact nhẹ hơn để bớt 9–16 s chờ, đo lại bằng cùng script.
 
 ### 2. Character consistency khả thi trên máy hiện tại
 

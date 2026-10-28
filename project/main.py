@@ -57,6 +57,7 @@ from yumeai.services.comfy_service import (
 from yumeai.services.memory_service import (
     FACT_KEYS,
     build_conversation_memory,
+    known_user_name,
     refresh_conversation_memory,
 )
 from yumeai.storage import YumeDatabase
@@ -206,8 +207,13 @@ async def list_personas():
 
 @app.get("/app", include_in_schema=False)
 async def web_app():
-    """Giao diện web thật, dùng API conversation/gallery thay cho mock data."""
-    return FileResponse(WEB_UI_PATH)
+    """Giao diện web thật, dùng API conversation/gallery thay cho mock data.
+
+    `no-cache`: trình duyệt phải hỏi lại máy chủ mỗi lần mở (ETag nên vẫn rẻ). Thiếu nó,
+    trình duyệt tự đoán thời hạn từ Last-Modified và cứ dùng bản cũ sau khi cập nhật app —
+    gặp 29/10: sửa giao diện xong, tab đang mở vẫn chạy bản trước (D30).
+    """
+    return FileResponse(WEB_UI_PATH, headers={"Cache-Control": "no-cache"})
 
 
 # ══════════════════════════════════
@@ -510,6 +516,7 @@ async def chat(req: ChatReq):
     history = req.history
     conversation = None
     memory_context = None
+    known_name = ""
     if req.conversation_id:
         conversation = await _owned_conversation(
             req.conversation_id, req.user_id, req.persona_id
@@ -547,6 +554,9 @@ async def chat(req: ChatReq):
             history,
             persona.get("name", ""),
         )
+        known_name = await asyncio.to_thread(
+            known_user_name, database, conversation["user_id"], conversation["character_id"],
+        )
 
     # Tóm tắt lịch sử có thể gọi Ollama nên không được chặn event loop FastAPI.
     messages = await asyncio.to_thread(
@@ -557,7 +567,8 @@ async def chat(req: ChatReq):
         # Chuỗi rỗng là có chủ đích: persistent route đã tự dựng memory ở trên,
         # không để build_persona_messages gọi summarizer lần thứ hai.
         memory_summary=memory_context if conversation else None,
-        user_name=req.user_name or (conversation or {}).get("user_name", ""),
+        # Tên người dùng tự giới thiệu (fact) thắng tên giao diện gửi kèm (D30).
+        user_name=known_name or req.user_name or (conversation or {}).get("user_name", ""),
     )
 
     completion = {"done": False}

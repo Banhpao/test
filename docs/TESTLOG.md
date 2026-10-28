@@ -12,6 +12,34 @@ Mục mới nhất ở **trên cùng**.
 
 ---
 
+## 2026-10-29 — RTX 3050 Laptop 4 GB — đo kịch bản "Tuấn" nhiều lần; thử cho chat chen ngang trích fact (D30)
+
+**Cách đo**
+- Script chạy ngay trong trang `/app` (Claude nạp qua trình duyệt tích hợp, không lưu vào dự án): mỗi lần một
+  `user_id` riêng (`thu_<lần>_<nhân vật>`), gửi qua `/api/chat` như giao diện, nghỉ **6 s** giữa hai câu (người gõ
+  nhanh). Pao 14 câu, Su 6 câu như 27/10, bỏ câu xin ảnh. Sau câu cuối chờ fact ổn định (≥ 30 s).
+- Dữ liệu riêng `project\data\thu-lai\20261029-*`. Cùng model, cùng cấu hình như 28/10.
+- Chấm: fact đúng/thiếu/trùng/sai so với điều người dùng nói (Pao 6: tên, nghề, nơi sống, đồ uống, con chó, chuyến
+  Sài Gòn; Su 5); nhớ lại = câu trả lời câu hỏi trí nhớ (Pao câu 12–13, Su câu 6) có đúng không. "Bơ" mà gọi là mèo
+  tính là sai.
+
+| Bộ | Code | Fact Pao | Nhớ lại Pao | Fact Su | Nhớ lại Su | Chờ sau lô trích fact |
+|---|---|---|---|---|---|---|
+| A1–A4 | `eb08dad` | 24/24 | 19/20 (A1 "Mèo hoang, tên là Bơ") | 18/20 (A3 thiếu nghề, nơi sống) | 12/12 | câu 7 và 13: 8,4–16,3 s |
+| B1 | nhường vô hạn | 5/6 — chỉ có sau câu cuối (một lô 24 tin), mất chuyến Sài Gòn | **0/5** — "Mình tên Minh, làm thiết kế đồ họa… Ở Sài Gòn", "Không nuôi con nào cả" | 3/5 | 3/3 | không có (≤ 1,1 s) |
+| C1–C2 | nhường 1 lần/lô | 10/12 (C1 thiếu nơi sống, C2 mất chuyến Sài Gòn) | 8/10 — C1 "Ở Sài Gòn", C2 gọi Bơ là mèo | 9/10 | 6/6 | dời sang câu 8: 15,3–17,0 s |
+| **D1–D4** | **bản cuối** (không nhường; tên từ fact; không gửi "Minh") | **24/24** | **20/20** | **19/20** (D1 thiếu nơi sống) | **12/12** | câu 7 và 13: 9,3–16,4 s |
+
+- Không lần nào có fact sai hay fact trùng (bộ lọc D29 hoạt động). Các lượt khác: chữ đầu trung vị ~0,5 s;
+  khởi động lạnh 6 s.
+- Bộ A gửi kèm tên "Minh" (giao diện cũ) mà vẫn nhớ đúng tên vì fact `name` đã có trước câu hỏi; B1 cho thấy khi
+  chưa có fact thì tên giả thắng → sửa ở D30.
+
+**Kết luận:** độ đúng của trí nhớ ổn định qua nhiều lần (Pao 24/24, Su 19/20, nhớ lại 32/32 ở bản cuối). Thời gian
+chờ sau lô trích fact không giảm được bằng cách cho chat chen ngang — chỉ bằng lô nhẹ hơn (STATE).
+
+---
+
 ## 2026-10-28 (tối) — RTX 3050 Laptop 4 GB — chạy lại lần hai: tóm tắt tắt mặc định (D29)
 
 **Cấu hình chạy**

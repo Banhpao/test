@@ -129,6 +129,27 @@ class ApiStorageTests(unittest.TestCase):
             self.assertEqual(roles, ["assistant", "user", "assistant"])
             self.assertEqual(loaded.json()["messages"][-1]["content"], "Hừ, chào.")
 
+    def test_name_the_user_gave_wins_over_the_ui_name(self):
+        """D30: /app từng gửi cứng user_name "Minh" — nhân vật đáp "Mình tên Minh" dù người
+        dùng đã xưng là Tuấn. Fact `name` thắng tên gửi kèm."""
+        conversation = self.database.create_conversation("user_001", "pao", display_name="Minh")
+        self.database.upsert_memory_fact("user_001", "pao", "name", "Tuấn")
+        real_builder = main.build_persona_messages
+        with (
+            patch.object(main, "check_chat_model", return_value=None),
+            patch.object(main, "warmup_ollama", return_value=None),
+            patch.object(main, "refresh_conversation_memory", return_value=None),
+            TestClient(main.app) as client,
+            patch.object(main.httpx, "AsyncClient", _FakeAsyncClient),
+            patch.object(main, "build_persona_messages", wraps=real_builder) as builder,
+        ):
+            response = client.post("/api/chat", json={
+                "message": "Chào em", "persona_id": "pao", "user_id": "user_001",
+                "user_name": "Minh", "conversation_id": conversation["id"],
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(builder.call_args.kwargs["user_name"], "Tuấn")
+
     def _chat(self, client, conversation_id, message="Chào em"):
         return client.post(
             "/api/chat",

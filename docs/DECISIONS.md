@@ -866,3 +866,31 @@ thành fact sẽ bị quên — đúng 28/10, "mai đi công tác Sài Gòn" kh�
 - **(c) Chạy nền:** thêm code mà kết quả vẫn bị lọc gần hết, và vẫn tranh GPU với lượt chat kế tiếp (trích
   fact chạy nền đã làm một lượt chờ 18 s, xem TESTLOG 28/10 tối).
 - **Gộp fact trùng trên DB** (khác lô): chưa làm; bộ lọc chỉ xét trong một lô.
+
+## D30 — Tên người dùng lấy từ fact; thử cho chat "chen ngang" trích fact rồi bỏ
+**Ngày:** 2026-10-29 · **Trạng thái:** đã làm (phần tên); phần chen ngang đã thử và loại
+
+**Bối cảnh.** Đo kịch bản "Tuấn" nhiều lần bằng script chạy trong trang `/app` (TESTLOG 29/10), mỗi lần một
+`user_id` riêng, cách nhau 6 s giữa hai câu. Hai việc lộ ra:
+- **Tên giả "Minh":** `chat-ui-mockup.html` ghi cứng `USER_NAME = 'Minh'` và gửi kèm mỗi lượt chat, nên prompt
+  luôn có "Tên người bạn đang nhắn tin: Minh". Khi lời tự giới thiệu đã trôi khỏi cửa sổ 12 tin mà chưa có fact,
+  nhân vật đáp "Mình tên Minh…" (gặp 28/10 và 29/10).
+- **Chờ sau lô trích fact:** Ollama làm tuần tự, lô trích fact chạy nền ~15–22 s, nên câu kế tiếp chờ 8–16 s
+  (mọi lần chạy, ngay sau mỗi lô).
+
+**Quyết định.**
+- `memory_service.known_user_name()`: fact `name` (người dùng tự giới thiệu) thắng `user_name` gửi kèm và tên
+  lưu trong bảng users. `/app` thôi gửi tên giả (`USER_NAME = ''`, thanh bên hiện "Bạn").
+- `/app` trả `Cache-Control: no-cache`: không có nó, trình duyệt cứ chạy giao diện cũ sau khi cập nhật (gặp lúc
+  đo: sửa xong, tab vẫn gửi "Minh").
+
+**Đã thử và loại — cho lượt chat chen ngang lô trích fact.** Lô trích fact gửi dạng stream, có lượt chat thì
+đóng kết nối (Ollama dừng sinh) và chạy lại sau.
+- **Nhường vô hạn:** lượt chat hết chờ (≤ 1,1 s) nhưng người gõ đều tay thì lô không bao giờ chạy xong; tới câu
+  hỏi trí nhớ chưa có fact nào → Pao đáp "Mình tên Minh, làm thiết kế đồ họa… Ở Sài Gòn", "Không nuôi con nào
+  cả". Lô dồn lại thành 24 tin nên mất luôn chuyện công tác Sài Gòn.
+- **Nhường một lần mỗi lô:** chỉ dời lượt chờ sang câu sau (câu 7 nhanh, câu 8 chờ 15–17 s); fact và trí nhớ
+  không khá hơn (một lần thiếu "Nơi sống" → lại "ở Sài Gòn").
+- Người gõ bình thường (15–30 s mỗi câu) thì lô xong trong lúc họ gõ, có nhường hay không như nhau. Thêm độ phức
+  tạp và rủi ro làm đói trí nhớ mà không bớt được giây chờ nào → bỏ. Muốn bớt chờ thật thì phải làm lô trích fact
+  **nhẹ hơn** (ít token ra hơn) — việc tiếp theo, cần đo.

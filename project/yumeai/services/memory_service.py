@@ -480,6 +480,19 @@ def _local_day(iso_text) -> str:
     return moment.astimezone().strftime("%d/%m/%Y")
 
 
+def known_user_name(database, user_id: str, character_id: str) -> str:
+    """Tên người dùng TỰ giới thiệu với nhân vật này (fact `name`), "" nếu chưa có.
+
+    Thắng tên giao diện gửi kèm: /app từng gửi cứng "Minh" nên prompt luôn ghi "Tên người
+    bạn đang nhắn tin: Minh" trong khi người dùng xưng là Tuấn — nhân vật đáp "Mình tên
+    Minh…" (đo 29/10, D30).
+    """
+    for fact in database.list_memory_facts(user_id, character_id):
+        if fact.get("fact_key") == "name" and str(fact.get("fact_value", "")).strip():
+            return str(fact["fact_value"]).strip()
+    return ""
+
+
 def format_memory_context(facts: list[dict], today: str | None = None) -> str:
     """Dạng ngắn đưa vào system prompt, giới hạn để model nhỏ không tràn context.
 

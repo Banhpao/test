@@ -10,6 +10,14 @@ Quyết định thiết kế thì ghi vào [`DECISIONS.md`](DECISIONS.md), khôn
 
 ---
 
+## 2026-10-29
+
+- Đo kịch bản "Tuấn" nhiều lần (TESTLOG 29/10): script chạy trong trang `/app`, mỗi lần một `user_id` riêng, 6 s giữa hai câu. Bản cuối (4 lần): Pao fact 24/24, nhớ lại 20/20; Su fact 19/20, nhớ lại 12/12.
+- Tên người dùng (D30): fact `name` thắng `user_name` gửi kèm (`memory_service.known_user_name()`); `/app` thôi ghi cứng tên "Minh" (`USER_NAME = ''`, thanh bên hiện "Bạn"); `/app` trả `Cache-Control: no-cache` để trình duyệt không chạy giao diện cũ sau khi cập nhật. Test: `test_memory.py` 32, `test_api_storage.py` 8, `test_web_ui.py` 10.
+- Đã thử cho lượt chat chen ngang lô trích fact (nhường vô hạn, rồi nhường một lần) — đo xong thì bỏ, không có trong mã (D30).
+
+---
+
 ## 2026-10-28
 
 - Tắt tóm tắt hội thoại mặc định (D29): `YUMEAI_CHAT_SUMMARY=0` trong `config.py`, `env.example`, RUNBOOK; tắt thì không gọi LLM, không dùng bản đã lưu, chỉ đọc cửa sổ gần. Trích fact giải thích `current_event`/`promise` (giữ mốc thời gian), ghi đủ mọi điều trong một câu, mỗi điều một lần vào khoá cụ thể nhất; code bỏ fact ở `likes`/`family` trùng fact cụ thể hơn trong cùng lô. Fact `current_event`/`promise` đưa vào prompt kèm ngày ghi và dòng "Hôm nay là …". Test: `test_memory.py` 31, `test_chat_context.py` 19 (bật tóm tắt cho cả module, thêm test mặc định tắt), `test_api_storage.py` bật tóm tắt trong test cache, `test_router.py` kiểm mặc định tắt.
